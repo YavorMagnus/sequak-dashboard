@@ -219,87 +219,156 @@ if page == "📊 Оперативен Дашборд":
 # ==========================================================
 elif page == "📝 Регистър Оплаквания (РО)":
     st.title("📝 Управление на Сигнали (РО)")
-    st.write("Форма за въвеждане на нов сигнал от служител (Фаза 1)")
-    st.markdown("---")
+    
+    # Използваме табове за разделяне на Въвеждане и Списък
+    tab_new, tab_list = st.tabs(["➕ Въвеждане на нов сигнал", "📋 Списък със сигнали"])
+    
+    with tab_new:
+        st.write("Форма за въвеждане на нов сигнал от служител (Фаза 1)")
+        st.markdown("---")
 
-    # Инициализираме ключ в session_state за изчистване на формата
-    if "form_key" not in st.session_state:
-        st.session_state.form_key = 0
+        if "form_key" not in st.session_state:
+            st.session_state.form_key = 0
 
-    # Премахваме clear_on_submit=True, за да не се чисти при натискане на Enter
-    with st.form(f"new_complaint_form_{st.session_state.form_key}"):
-        st.subheader("Основни данни")
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            channel = st.selectbox("Канал на постъпване *", ["Телефон", "Email", "Чат", "Друго"])
-        with col2:
-            company_selected = st.selectbox("Фирма *", COMPANY_LIST)
-        with col3:
-            event_date = st.date_input("Дата на сигнала *")
-        with col4:
-            event_time_str = st.text_input("Час (напр. 1430 или 14:30) *", placeholder="Въведете цифри...")
+        with st.form(f"new_complaint_form_{st.session_state.form_key}"):
+            st.subheader("Основни данни")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                channel = st.selectbox("Канал на постъпване *", ["Телефон", "Email", "Чат", "Друго"])
+            with col2:
+                company_selected = st.selectbox("Фирма *", COMPANY_LIST)
+            with col3:
+                event_date = st.date_input("Дата на сигнала *")
+            with col4:
+                event_time_str = st.text_input("Час (напр. 1430 или 14:30) *", placeholder="Въведете цифри...")
 
-        st.subheader("Данни за клиента")
-        col5, col6, col7, col8 = st.columns([2, 1, 1, 1])
-        with col5:
-            client_name = st.text_input("Име/Наименование *")
-            client_type = st.selectbox("Вид клиент", ["Юридическо лице", "Физическо лице", "Неизвестно"])
-        with col6:
-            client_phone = st.text_input("Телефон")
-            client_eik = st.text_input("ЕИК (за ЮЛ)")
-        with col7:
-            client_email = st.text_input("Email")
-            contract_number = st.text_input("Договор/Поръчка №", max_chars=20)
-        with col8:
-            pass
+            st.subheader("Данни за клиента")
+            col5, col6, col7, col8 = st.columns([2, 1, 1, 1])
+            with col5:
+                client_name = st.text_input("Име/Наименование *")
+                client_type = st.selectbox("Вид клиент", ["Юридическо лице", "Физическо лице", "Неизвестно"])
+            with col6:
+                client_phone = st.text_input("Телефон")
+                client_eik = st.text_input("ЕИК (за ЮЛ)")
+            with col7:
+                client_email = st.text_input("Email")
+                contract_number = st.text_input("Договор/Поръчка №", max_chars=20)
+            with col8:
+                pass
+                
+            st.subheader("Същност на проблема")
+            col9, col10 = st.columns(2)
+            with col9:
+                case_type = st.selectbox("Касае *", ["Наем", "Продажба", "Ремонт", "Друго"])
+                call_number = st.text_input("Номер на разговора (за аудио запис)")
+            with col10:
+                recommended_action = st.selectbox("Препоръчано действие", ["Корективно", "Организационно", "Санкционно", "Проверка", "Неприложимо"])
+                
+            description = st.text_area("Изложение на проблема *", height=120, placeholder="Опишете сбито какъв е проблемът на клиента...")
             
-        st.subheader("Същност на проблема")
-        col9, col10 = st.columns(2)
-        with col9:
-            case_type = st.selectbox("Касае *", ["Наем", "Продажба", "Ремонт", "Друго"])
-            call_number = st.text_input("Номер на разговора (за аудио запис)")
-        with col10:
-            recommended_action = st.selectbox("Препоръчано действие", ["Корективно", "Организационно", "Санкционно", "Проверка", "Неприложимо"])
-            
-        description = st.text_area("Изложение на проблема *", height=120, placeholder="Опишете сбито какъв е проблемът на клиента...")
+            st.write("*Полетата със звезда са задължителни.*")
+            submit_button = st.form_submit_button("Запиши сигнала", type="primary")
+
+            if submit_button:
+                formatted_time = parse_smart_time(event_time_str)
+                
+                if not company_selected or not client_name or not description or not event_time_str:
+                    st.error("⚠️ Моля, попълнете Фирма, Дата, Час, Име на клиент и Изложение на проблема!")
+                elif not formatted_time:
+                    st.error("⚠️ Невалиден час! Моля, въведете коректен час (например: 1430, 9:15, 14:30:00).")
+                else:
+                    try:
+                        company_id = COMPANY_MAP.get(company_selected)
+                        datetime_str = f"{event_date.strftime('%Y-%m-%d')} {formatted_time}"
+                        
+                        new_record = {
+                            "channel": channel,
+                            "event_datetime": datetime_str,
+                            "company_id": company_id,
+                            "client_name": client_name,
+                            "client_phone": client_phone,
+                            "client_email": client_email,
+                            "client_type": client_type,
+                            "client_eik": client_eik,
+                            "contract_number": contract_number,
+                            "case_type": case_type,
+                            "call_number": call_number,
+                            "recommended_action": recommended_action,
+                            "description": description,
+                            "status": "Постъпил"
+                        }
+                        
+                        supabase.table("complaints").insert(new_record).execute()
+                        
+                        st.success(f"✅ Сигналът е записан успешно! (Разпознат час: {formatted_time})")
+                        st.session_state.form_key += 1
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Възникна грешка при запис: {e}")
+
+    # ==========================================
+    # --- ТАБЛО СЪС СИГНАЛИ (НОВО) ---
+    # ==========================================
+    with tab_list:
+        st.subheader("Всички въведени сигнали")
         
-        st.write("*Полетата със звезда са задължителни.*")
-        submit_button = st.form_submit_button("Запиши сигнала", type="primary")
-
-        if submit_button:
-            formatted_time = parse_smart_time(event_time_str)
+        try:
+            # Дърпаме всички оплаквания и името на фирмата
+            res = supabase.table("complaints").select("*, companies(code)").order("created_at", desc=True).execute()
+            df_complaints = pd.DataFrame(res.data)
             
-            if not company_selected or not client_name or not description or not event_time_str:
-                st.error("⚠️ Моля, попълнете Фирма, Дата, Час, Име на клиент и Изложение на проблема!")
-            elif not formatted_time:
-                st.error("⚠️ Невалиден час! Моля, въведете коректен час (например: 1430, 9:15, 14:30:00).")
+            if not df_complaints.empty:
+                # Почистваме и подготвяме данните за показване
+                df_complaints['Фирма'] = df_complaints['companies'].apply(lambda x: x.get('code', '') if isinstance(x, dict) else '')
+                df_complaints['Дата и Час'] = pd.to_datetime(df_complaints['event_datetime']).dt.strftime('%d.%m.%Y %H:%M')
+                
+                # Избираме само колоните, които искаме да виждаме
+                display_cols = ['status', 'Дата и Час', 'Фирма', 'client_name', 'case_type', 'description']
+                df_display = df_complaints[display_cols].copy()
+                
+                # Преименуваме ги за по-красиво
+                df_display.columns = ['Статус', 'Дата и Час', 'Фирма', 'Клиент', 'Касае', 'Описание']
+                
+                # Показваме интерактивна таблица, в която може да се редактира само колоната 'Статус'
+                edited_df = st.data_editor(
+                    df_display,
+                    column_config={
+                        "Статус": st.column_config.SelectboxColumn(
+                            "Статус",
+                            help="Сменете статуса на сигнала",
+                            width="medium",
+                            options=["Постъпил", "Видян", "Обработва се", "Чака становище от клиент", "Приключен"],
+                            required=True,
+                        ),
+                        "Описание": st.column_config.TextColumn("Описание", width="large")
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                    key="complaints_editor" # Ключ, за да хващаме промените
+                )
+                
+                # Логика за запазване на промените в статуса
+                if st.button("💾 Запази промените по статусите", type="primary"):
+                    with st.spinner("Запазване..."):
+                        # Намираме кои редове са били променени
+                        changes = st.session_state["complaints_editor"].get("edited_rows", {})
+                        
+                        if changes:
+                            for row_idx, updates in changes.items():
+                                if 'Статус' in updates:
+                                    new_status = updates['Статус']
+                                    # Взимаме оригиналното ID на реда
+                                    record_id = df_complaints.iloc[row_idx]['id']
+                                    # Обновяваме в базата данни
+                                    supabase.table("complaints").update({"status": new_status}).eq("id", record_id).execute()
+                            
+                            st.success("✅ Промените са запазени!")
+                            st.rerun()
+                        else:
+                            st.info("Няма направени промени.")
+                            
             else:
-                try:
-                    company_id = COMPANY_MAP.get(company_selected)
-                    datetime_str = f"{event_date.strftime('%Y-%m-%d')} {formatted_time}"
-                    
-                    new_record = {
-                        "channel": channel,
-                        "event_datetime": datetime_str,
-                        "company_id": company_id,
-                        "client_name": client_name,
-                        "client_phone": client_phone,
-                        "client_email": client_email,
-                        "client_type": client_type,
-                        "client_eik": client_eik,
-                        "contract_number": contract_number,
-                        "case_type": case_type,
-                        "call_number": call_number,
-                        "recommended_action": recommended_action,
-                        "description": description,
-                        "status": "Постъпил"
-                    }
-                    
-                    supabase.table("complaints").insert(new_record).execute()
-                    
-                    st.success(f"✅ Сигналът е записан успешно! (Разпознат час: {formatted_time})")
-                    # Увеличаваме ключа, за да накараме Streamlit да преначертае формата празна (ръчно изчистване)
-                    st.session_state.form_key += 1
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Възникна грешка при запис: {e}")
+                st.info("Все още няма въведени сигнали.")
+                
+        except Exception as e:
+            st.error(f"Грешка при зареждане на сигналите: {e}")
