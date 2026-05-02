@@ -2,18 +2,13 @@ import streamlit as st
 from supabase import create_client, Client
 import pandas as pd
 
-# --- НАСТРОЙКИ НА СТРАНИЦАТА (Тъмна тема и жълти акценти) ---
+# --- НАСТРОЙКИ НА СТРАНИЦАТА ---
 st.set_page_config(page_title="SequaK Dashboard", page_icon="🏗️", layout="wide")
 
 st.markdown("""
     <style>
-    /* Тъмен фон и бели текстове като основа */
     .stApp { background-color: #111111; color: #FFFFFF; }
-    
-    /* Жълт текст за заглавията */
     h1, h2, h3 { color: #FFD700; } 
-    
-    /* Стилизиране на числата (Метриките) */
     .stMetric label { color: #FFD700 !important; font-size: 1.2rem !important; }
     div[data-testid="metric-container"] {
         background-color: #222222; 
@@ -41,46 +36,53 @@ st.markdown("---")
 
 # --- ИЗВЛИЧАНЕ НА ДАННИТЕ ---
 try:
-    # 1. Данни за Пропуснати ползи
     response_pp = supabase.table("missed_profits").select("*").execute()
     df_pp = pd.DataFrame(response_pp.data)
 
-    # 2. Данни за Оплаквания (само отворените)
     response_ro = supabase.table("complaints").select("*, companies(code)").neq("status", "Приключен").execute()
     df_ro = pd.DataFrame(response_ro.data)
 
-    # --- ВИЗУАЛИЗАЦИЯ НА "СВЕТАТА ТРОИЦА" ---
+    # --- ВИЗУАЛИЗАЦИЯ НА ДАШБОРДА ---
     col1, col2, col3 = st.columns(3)
 
-    # 1. ТОТАЛ ПРОПУСНАТИ ПОЛЗИ (EUR)
     with col1:
         st.subheader("Пропуснати ползи")
-        if not df_pp.empty:
-            total_eur = df_pp['total_value_eur'].sum()
-            st.metric(label="Общо пропуски (Тестови данни)", value=f"€ {total_eur:,.2f}")
-        else:
-            st.metric(label="Общо пропуски", value="€ 0.00")
+        total_eur = df_pp['total_value_eur'].sum() if not df_pp.empty else 0
+        st.metric(label="Общо пропуски (Тестови данни)", value=f"€ {total_eur:,.2f}")
 
-    # 2. БРОЙ ПРОСРОЧЕНИ ОПЛАКВАНИЯ
     with col2:
         st.subheader("Отворени сигнали (РО)")
-        if not df_ro.empty:
-            open_cases = len(df_ro)
-            st.metric(label="Чакащи реакция", value=f"{open_cases} бр.")
-        else:
-            st.metric(label="Чакащи реакция", value="0 бр.")
+        open_cases = len(df_ro) if not df_ro.empty else 0
+        st.metric(label="Чакащи реакция", value=f"{open_cases} бр.")
 
-    # 3. ТОП 5 МАШИНИ ПО ТЪРСЕНЕ (Leaderboard)
     with col3:
         st.subheader("Топ 5 Машини (РПП)")
         if not df_pp.empty:
-            top_items = df_pp['item_tag'].value_counts().head(5)
-            st.dataframe(top_items, use_container_width=True)
+            st.dataframe(df_pp['item_tag'].value_counts().head(5), use_container_width=True)
         else:
-            st.write("Няма данни за машини.")
+            st.write("Няма данни.")
 
 except Exception as e:
     st.error(f"Възникна грешка при връзката с базата: {e}")
 
 st.markdown("---")
-st.info("Това е базовата визия. След като я подкараме, ще добавим формата за логин на управителите и бутона за импорт на Excel.")
+
+# --- НОВА СЕКЦИЯ: ИМПОРТ НА ДАННИ (EXCEL) ---
+st.header("📥 Внос на данни (РПП и РО)")
+st.write("Пуснете своя работен Excel файл тук, за да го заредим в системата.")
+
+uploaded_file = st.file_uploader("Изберете Excel файл (.xlsx)", type=["xlsx", "xls"])
+
+if uploaded_file is not None:
+    try:
+        # Платформата прочита файла
+        df_uploaded = pd.read_excel(uploaded_file)
+        st.success(f"✅ Файлът '{uploaded_file.name}' е разпознат успешно! Намерени са {len(df_uploaded)} реда.")
+        
+        # Показваме първите 10 реда за превю
+        st.write("👀 Преглед на първите 10 реда от файла:")
+        st.dataframe(df_uploaded.head(10), use_container_width=True)
+        
+        st.info("💡 Следваща стъпка: Ще добавим бутона 'Изпрати към базата', който автоматично ще сортира тези данни по правилните таблици.")
+    except Exception as e:
+        st.error(f"Възникна грешка при четенето на файла: {e}")
