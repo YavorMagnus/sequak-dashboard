@@ -86,27 +86,32 @@ if uploaded_file is not None:
         if st.button("🚀 ИЗПРАТИ ДАННИТЕ КЪМ БАЗАТА", type="primary"):
             with st.spinner("Записване в Supabase... моля изчакайте!"):
                 
-                # Проверяваме дали това е файлът с Пропуснати Ползи
-                if 'Тагове' in df_uploaded.columns and 'Обща стойност' in df_uploaded.columns:
-                    # Взимаме само нужните 2 колони и ги превеждаме на английски за базата
-                    df_to_insert = df_uploaded[['Тагове', 'Обща стойност']].copy()
+                # Проверяваме дали това е файлът с Пропуснати Ползи (вече търсим и Дата)
+                if 'Тагове' in df_uploaded.columns and 'Обща стойност' in df_uploaded.columns and 'Дата' in df_uploaded.columns:
+                    
+                    # Взимаме Дата, Тагове и Стойност
+                    df_to_insert = df_uploaded[['Дата', 'Тагове', 'Обща стойност']].copy()
                     df_to_insert = df_to_insert.rename(columns={
+                        'Дата': 'event_date',
                         'Тагове': 'item_tag',
                         'Обща стойност': 'total_value_eur'
                     })
                     
-                    # Почистваме от празни редове (ако Excel е захапал празни клетки надолу)
-                    df_to_insert['total_value_eur'] = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0)
-                    df_to_insert = df_to_insert.dropna(subset=['item_tag'])
+                    # Оправяме формата на датата, за да се хареса на базата данни (Година-Месец-Ден)
+                    df_to_insert['event_date'] = pd.to_datetime(df_to_insert['event_date'], dayfirst=True).dt.strftime('%Y-%m-%d %H:%M:%S')
                     
-                    # Превръщаме в речници и записваме
+                    # Почистваме от празни редове
+                    df_to_insert['total_value_eur'] = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0)
+                    df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date'])
+                    
+                    # Записваме
                     records = df_to_insert.to_dict(orient='records')
                     supabase.table("missed_profits").insert(records).execute()
                     
                     st.success("🎉 Данните са импортирани успешно! Презареждам таблото...")
-                    st.rerun() # Тази команда сама рефрешва сайта, за да видите новите цифри веднага!
+                    st.rerun() 
                 else:
-                    st.warning("⚠️ Не намирам колоните 'Тагове' и 'Обща стойност'. За момента импортът е настроен само за РПП.")
+                    st.warning("⚠️ Не намирам колоните 'Дата', 'Тагове' или 'Обща стойност'. Моля, уверете се, че сте на правилния sheet.")
 
     except Exception as e:
         st.error(f"Възникна грешка: {e}")
