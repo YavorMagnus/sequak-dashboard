@@ -48,7 +48,7 @@ try:
     with col1:
         st.subheader("Пропуснати ползи")
         total_eur = df_pp['total_value_eur'].sum() if not df_pp.empty else 0
-        st.metric(label="Общо пропуски (Тестови данни)", value=f"€ {total_eur:,.2f}")
+        st.metric(label="Общо пропуски (EUR)", value=f"€ {total_eur:,.2f}")
 
     with col2:
         st.subheader("Отворени сигнали (РО)")
@@ -57,7 +57,7 @@ try:
 
     with col3:
         st.subheader("Топ 5 Машини (РПП)")
-        if not df_pp.empty:
+        if not df_pp.empty and 'item_tag' in df_pp.columns:
             st.dataframe(df_pp['item_tag'].value_counts().head(5), use_container_width=True)
         else:
             st.write("Няма данни.")
@@ -67,29 +67,46 @@ except Exception as e:
 
 st.markdown("---")
 
-# --- НОВА СЕКЦИЯ: ИМПОРТ НА ДАННИ (EXCEL) ---
-st.header("📥 Внос на данни (РПП и РО)")
-st.write("Пуснете своя работен Excel файл тук, за да го заредим в системата.")
+# --- НОВА СЕКЦИЯ: ИМПОРТ НА ДАННИ ---
+st.header("📥 Внос на данни")
+st.write("Пуснете своя работен Excel файл тук. Системата автоматично ще разпознае данните.")
 
 uploaded_file = st.file_uploader("Изберете Excel файл (.xlsx)", type=["xlsx", "xls"])
 
 if uploaded_file is not None:
     try:
-        # Четем всички страници (sheets) от файла
         xls_file = pd.ExcelFile(uploaded_file)
-        
-        # Падащо меню за избор на страница
-        selected_sheet = st.selectbox("Изберете страница (Sheet) с данните:", xls_file.sheet_names)
-        
-        # Зареждаме само избраната страница
+        selected_sheet = st.selectbox("Изберете страница (Sheet):", xls_file.sheet_names)
         df_uploaded = pd.read_excel(uploaded_file, sheet_name=selected_sheet)
         
-        st.success(f"✅ Успешно заредена страница '{selected_sheet}' с {len(df_uploaded)} реда!")
+        st.success(f"✅ Заредена страница '{selected_sheet}' с {len(df_uploaded)} реда. Готови за запис!")
+        st.dataframe(df_uploaded.head(5), use_container_width=True)
         
-        # Показваме първите 10 реда за превю
-        st.write("👀 Преглед на първите 10 реда от файла:")
-        st.dataframe(df_uploaded.head(10), use_container_width=True)
-        
-        st.info("💡 Следваща стъпка: Ще добавим бутона 'Изпрати към базата', който автоматично ще сортира тези данни по правилните таблици.")
+        # --- БУТОН ЗА ЗАПИС В БАЗАТА ---
+        if st.button("🚀 ИЗПРАТИ ДАННИТЕ КЪМ БАЗАТА", type="primary"):
+            with st.spinner("Записване в Supabase... моля изчакайте!"):
+                
+                # Проверяваме дали това е файлът с Пропуснати Ползи
+                if 'Тагове' in df_uploaded.columns and 'Обща стойност' in df_uploaded.columns:
+                    # Взимаме само нужните 2 колони и ги превеждаме на английски за базата
+                    df_to_insert = df_uploaded[['Тагове', 'Обща стойност']].copy()
+                    df_to_insert = df_to_insert.rename(columns={
+                        'Тагове': 'item_tag',
+                        'Обща стойност': 'total_value_eur'
+                    })
+                    
+                    # Почистваме от празни редове (ако Excel е захапал празни клетки надолу)
+                    df_to_insert['total_value_eur'] = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0)
+                    df_to_insert = df_to_insert.dropna(subset=['item_tag'])
+                    
+                    # Превръщаме в речници и записваме
+                    records = df_to_insert.to_dict(orient='records')
+                    supabase.table("missed_profits").insert(records).execute()
+                    
+                    st.success("🎉 Данните са импортирани успешно! Презареждам таблото...")
+                    st.rerun() # Тази команда сама рефрешва сайта, за да видите новите цифри веднага!
+                else:
+                    st.warning("⚠️ Не намирам колоните 'Тагове' и 'Обща стойност'. За момента импортът е настроен само за РПП.")
+
     except Exception as e:
-        st.error(f"Възникна грешка при четенето на файла: {e}")
+        st.error(f"Възникна грешка: {e}")
