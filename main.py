@@ -3,6 +3,7 @@ from supabase import create_client, Client
 import pandas as pd
 import numpy as np
 import datetime
+import re
 
 # --- НАСТРОЙКИ НА СТРАНИЦАТА ---
 st.set_page_config(page_title="SequaK Workspace", page_icon="🏗️", layout="wide")
@@ -31,7 +32,6 @@ def init_connection():
 
 supabase: Client = init_connection()
 
-# Зареждане на ID-та на фирмите
 @st.cache_data(ttl=600)
 def get_companies():
     try:
@@ -201,10 +201,11 @@ elif page == "📝 Регистър Оплаквания (РО)":
         with col3:
             event_date = st.date_input("Дата на сигнала *")
         with col4:
-            event_time = st.time_input("Час *")
+            # Текстово поле за час с инструкции
+            event_time_str = st.text_input("Час (ЧЧ:ММ:СС) *", placeholder="14:30:00")
 
         st.subheader("Данни за клиента")
-        col5, col6, col7 = st.columns(3)
+        col5, col6, col7, col8 = st.columns([2, 1, 1, 1])
         with col5:
             client_name = st.text_input("Име/Наименование *")
             client_type = st.selectbox("Вид клиент", ["Юридическо лице", "Физическо лице", "Неизвестно"])
@@ -213,13 +214,18 @@ elif page == "📝 Регистър Оплаквания (РО)":
             client_eik = st.text_input("ЕИК (за ЮЛ)")
         with col7:
             client_email = st.text_input("Email")
+            # Ново поле за договор с ограничение от 20 символа
+            contract_number = st.text_input("Договор/Поръчка №", max_chars=20)
+        with col8:
+            # Празна колона за баланс на дизайна
+            pass
             
         st.subheader("Същност на проблема")
-        col8, col9 = st.columns(2)
-        with col8:
+        col9, col10 = st.columns(2)
+        with col9:
             case_type = st.selectbox("Касае *", ["Наем", "Продажба", "Ремонт", "Друго"])
             call_number = st.text_input("Номер на разговора (за аудио запис)")
-        with col9:
+        with col10:
             recommended_action = st.selectbox("Препоръчано действие", ["Корективно", "Организационно", "Санкционно", "Проверка", "Неприложимо"])
             
         description = st.text_area("Изложение на проблема *", height=120, placeholder="Опишете сбито какъв е проблемът на клиента...")
@@ -228,14 +234,17 @@ elif page == "📝 Регистър Оплаквания (РО)":
         submit_button = st.form_submit_button("Запиши сигнала", type="primary")
 
         if submit_button:
-            if not company_selected or not client_name or not description:
-                st.error("⚠️ Моля, попълнете Фирма, Име на клиент и Изложение на проблема!")
+            # Проверка за формат на часа (Регулярен израз: 00-23 : 00-59 : 00-59)
+            time_pattern = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$")
+            
+            if not company_selected or not client_name or not description or not event_time_str:
+                st.error("⚠️ Моля, попълнете Фирма, Дата, Час, Име на клиент и Изложение на проблема!")
+            elif not time_pattern.match(event_time_str):
+                st.error("⚠️ Грешен формат на часа! Моля, въведете часа във формат ЧЧ:ММ:СС (например 09:15:00 или 14:30:00).")
             else:
                 try:
                     company_id = COMPANY_MAP.get(company_selected)
-                    
-                    # Събираме датата и часа в един формат за базата
-                    datetime_str = f"{event_date.strftime('%Y-%m-%d')} {event_time.strftime('%H:%M:%S')}"
+                    datetime_str = f"{event_date.strftime('%Y-%m-%d')} {event_time_str}"
                     
                     new_record = {
                         "channel": channel,
@@ -246,11 +255,12 @@ elif page == "📝 Регистър Оплаквания (РО)":
                         "client_email": client_email,
                         "client_type": client_type,
                         "client_eik": client_eik,
+                        "contract_number": contract_number, # Добавено тук
                         "case_type": case_type,
                         "call_number": call_number,
                         "recommended_action": recommended_action,
                         "description": description,
-                        "status": "Постъпил" # Статусът се записва автоматично, както се разбрахме!
+                        "status": "Постъпил"
                     }
                     
                     supabase.table("complaints").insert(new_record).execute()
