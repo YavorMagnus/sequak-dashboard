@@ -41,18 +41,16 @@ try:
 except Exception:
     COMPANY_MAP = {}
 
-# УМЕН ПРЕВОДАЧ НА ФИРМИ (вече с RCD!)
 def standardize_company_code(excel_name):
     name = str(excel_name).lower()
     if 'ren' in name: return 'REN'
-    # Ако намери RCD или CIM, го насочваме правилно според това какво очаква базата
     if 'rcd' in name or ('cim' in name and 'cmx' not in name): 
         return 'CIM' if 'CIM' in COMPANY_MAP else 'RCD'
     if 'mas' in name: return 'MAS'
     if 'cmx' in name: return 'CMX'
     return str(excel_name).upper().strip()
 
-# --- ИЗВЛИЧАНЕ НА ДАННИТЕ ---
+# --- ИЗВЛИЧАНЕ НА ДАННИТЕ (И ПОДГОТОВКА ЗА ОХРАНАТА) ---
 try:
     response_pp = supabase.table("missed_profits").select("*, companies(code)").execute()
     df_pp = pd.DataFrame(response_pp.data)
@@ -93,7 +91,6 @@ try:
 
         with tab_all: show_top_10(df_pp)
         with tab_ren: show_top_10(df_pp[df_pp['company_code'] == 'REN'])
-        # Осигуряваме се, че табът CIM ще хване и RCD, ако базата го е запазила така
         with tab_cim: show_top_10(df_pp[df_pp['company_code'].isin(['CIM', 'RCD'])])
         with tab_mas: show_top_10(df_pp[df_pp['company_code'] == 'MAS'])
         with tab_cmx: show_top_10(df_pp[df_pp['company_code'] == 'CMX'])
@@ -110,7 +107,7 @@ st.markdown("---")
 
 # --- СЕКЦИЯ: ИМПОРТ ---
 st.header("📥 Внос на данни")
-st.write("Пуснете своя работен Excel файл тук.")
+st.write("Пуснете своя работен Excel файл тук. Системата автоматично ще игнорира вече качените дубликати.")
 
 uploaded_file = st.file_uploader("Изберете Excel файл (.xlsx)", type=["xlsx", "xls"])
 
@@ -123,7 +120,7 @@ if uploaded_file is not None:
         st.success(f"✅ Заредена страница '{selected_sheet}'.")
         
         if st.button("🚀 ИЗПРАТИ ДАННИТЕ КЪМ БАЗАТА", type="primary"):
-            with st.spinner("Анализиране и запис... моля изчакайте!"):
+            with st.spinner("Проверка за дубликати и запис... моля изчакайте!"):
                 
                 required_cols = ['Дата', 'Тагове', 'Обща стойност', 'Резултат', 'Фирма']
                 if all(col in df_uploaded.columns for col in required_cols):
@@ -145,20 +142,49 @@ if uploaded_file is not None:
                     df_to_insert['total_value_eur'] = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0)
                     df_to_insert['resolution_status'] = df_to_insert['resolution_status'].fillna('Неопределен')
                     
-                    # Магически превод на фирмите - вече включва RCD!
                     df_to_insert['mapped_code'] = df_to_insert['Фирма'].apply(standardize_company_code)
                     df_to_insert['company_id'] = df_to_insert['mapped_code'].map(COMPANY_MAP)
                     
-                    # 🔴 ЗАЩИТА
+                    # Изчистване на счупени редове
                     df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date', 'company_id'])
                     df_to_insert = df_to_insert.replace({float('nan'): None, np.nan: None})
-                    df_to_insert = df_to_insert.drop(columns=['Фирма', 'mapped_code'])
                     
-                    records = df_to_insert.to_dict(orient='records')
-                    supabase.table("missed_profits").insert(records).execute()
+                    # =========================================================
+                    # 🛡️ УМНАТА ОХРАНА ПРОТИВ ДУБЛИКАТИ 🛡️
+                    # =========================================================
                     
-                    st.success("🎉 Данните са импортирани успешно! Презареждам...")
-                    st.rerun() 
+                    # 1. Взимаме "пръстовите отпечатъци" на вече качените данни
+                    existing_fingerprints = set()
+                    if not df_pp.empty and 'event_date' in df_pp.columns:
+                        existing_dates = pd.to_datetime(df_pp['event_date']).dt.strftime('%Y-%m-%d')
+                        existing_sigs = df_pp['company_id'].astype(str) + "|" + df_pp['item_tag'].astype(str) + "|" + existing_dates + "|" + df_pp['total_value_eur'].astype(str)
+                        existing_fingerprints = set(existing_sigs)
+
+                    # 2. Правим същите отпечатъци за новите данни от Ексела
+                    new_dates = pd.to_datetime(df_to_insert['event_date']).dt.strftime('%Y-%m-%d')
+                    df_to_insert['fingerprint'] = df_to_insert['company_id'].astype(str) + "|" + df_to_insert['item_tag'].astype(str) + "|" + new_dates + "|" + df_to_insert['total_value_eur'].astype(str)
+                    
+                    # 3. Премахваме вътрешните дубликати в самия ексел (ако има)
+                    df_to_insert = df_to_insert.drop_duplicates(subset=['fingerprint'])
+                    
+                    # 4. Оставяме САМО тези редове, които ги НЯМА в базата
+                    df_final = df_to_insert[~df_to_insert['fingerprint'].isin(existing_fingerprints)].copy()
+                    
+                    # Махаме техническите колони преди запис
+                    df_final = df_final.drop(columns=['Фирма', 'mapped_code', 'fingerprint'])
+                    
+                    # =========================================================
+
+                    # Записваме в базата само ако има нови неща
+                    if df_final.empty:
+                        st.info("⚠️ Всички тези данни вече са качени в базата! Няма нови записи за добавяне. (Охраната Ви предпази от дублиране)")
+                    else:
+                        records = df_final.to_dict(orient='records')
+                        supabase.table("missed_profits").insert(records).execute()
+                        
+                        skipped_count = len(df_to_insert) - len(df_final)
+                        st.success(f"🎉 Успешно добавени {len(df_final)} НОВИ записа! (Пропуснати {skipped_count} вече съществуващи). Презареждам...")
+                        st.rerun() 
                 else:
                     st.warning("⚠️ Липсват нужни колони.")
     except Exception as e:
