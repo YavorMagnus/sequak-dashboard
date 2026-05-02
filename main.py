@@ -41,7 +41,6 @@ def get_companies():
         return {}
 
 COMPANY_MAP = get_companies()
-# Списък с имена за падащото меню (пр: REN, CIM, MAS, CMX)
 COMPANY_LIST = list(COMPANY_MAP.keys()) if COMPANY_MAP else ["Няма заредени фирми"]
 
 def standardize_company_code(excel_name):
@@ -62,10 +61,9 @@ st.sidebar.markdown("---")
 st.sidebar.caption("Входът е защитен. Версия 1.1")
 
 # ==========================================================
-# --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (Съществуващата) ---
+# --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД ---
 # ==========================================================
 if page == "📊 Оперативен Дашборд":
-    # --- ИЗВЛИЧАНЕ НА ДАННИТЕ ---
     try:
         response_pp = supabase.table("missed_profits").select("*, companies(code)").execute()
         df_pp = pd.DataFrame(response_pp.data)
@@ -77,8 +75,8 @@ if page == "📊 Оперативен Дашборд":
             df_pp['company_code'] = 'UNKNOWN'
             df_pp['clean_machine'] = 'UNKNOWN'
 
-        response_ro = supabase.table("complaints").select("*, companies(code)").neq("status", "Приключен").execute()
-        df_ro = pd.DataFrame(response_ro.data)
+        response_ro = supabase.table("complaints").select("id").neq("status", "Приключен").execute()
+        open_cases = len(response_ro.data)
 
         st.title("📊 Оперативен Дашборд")
         st.markdown("---")
@@ -111,7 +109,6 @@ if page == "📊 Оперативен Дашборд":
 
         st.markdown("---")
         st.subheader("Отворени сигнали (РО)")
-        open_cases = len(df_ro) if not df_ro.empty else 0
         st.metric(label="Чакащи реакция", value=f"{open_cases} бр.")
 
     except Exception as e:
@@ -119,7 +116,6 @@ if page == "📊 Оперативен Дашборд":
 
     st.markdown("---")
     
-    # --- СЕКЦИЯ: ИМПОРТ НА ПРОПУСНАТИ ПОЛЗИ ---
     st.header("📥 Внос на данни (Пропуснати ползи)")
     st.write("Пуснете своя работен Excel файл тук. Системата автоматично ще игнорира вече качените дубликати.")
 
@@ -138,7 +134,6 @@ if page == "📊 Оперативен Дашборд":
                     required_cols = ['Дата', 'Тагове', 'Обща стойност', 'Резултат', 'Фирма']
                     if all(col in df_uploaded.columns for col in required_cols):
                         df_to_insert = df_uploaded[required_cols].copy()
-                        
                         df_to_insert = df_to_insert.rename(columns={
                             'Дата': 'event_date', 'Тагове': 'item_tag',
                             'Обща стойност': 'total_value_eur', 'Резултат': 'resolution_status'
@@ -188,60 +183,78 @@ if page == "📊 Оперативен Дашборд":
         except Exception as e:
             st.error(f"Възникна грешка: {e}")
 
-
 # ==========================================================
-# --- СТРАНИЦА 2: РЕГИСТЪР ОПЛАКВАНИЯ (РО) - НОВО! ---
+# --- СТРАНИЦА 2: РЕГИСТЪР ОПЛАКВАНИЯ (РО) ---
 # ==========================================================
 elif page == "📝 Регистър Оплаквания (РО)":
     st.title("📝 Управление на Сигнали (РО)")
-    st.write("Тук се въвеждат и следят всички оплаквания, ремонти и сервизни заявки.")
+    st.write("Форма за въвеждане на нов сигнал от служител (Фаза 1)")
     st.markdown("---")
 
-    # Форма за въвеждане на нов сигнал
-    st.subheader("➕ Въвеждане на нов сигнал")
-    
-    # st.form групира полетата и не праща нищо към базата, докато не се натисне бутона "Запиши"
     with st.form("new_complaint_form", clear_on_submit=True):
-        col_form1, col_form2 = st.columns(2)
-        
-        with col_form1:
-            company_selected = st.selectbox("Изберете Фирма *", COMPANY_LIST)
-            machine_tag = st.text_input("Машина / Инвентарен № *", placeholder="напр. Багер или Инв. № 12345")
+        st.subheader("Основни данни")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            channel = st.selectbox("Канал на постъпване *", ["Телефон", "Email", "Чат", "Друго"])
+        with col2:
+            company_selected = st.selectbox("Фирма *", COMPANY_LIST)
+        with col3:
+            event_date = st.date_input("Дата на сигнала *")
+        with col4:
+            event_time = st.time_input("Час *")
+
+        st.subheader("Данни за клиента")
+        col5, col6, col7 = st.columns(3)
+        with col5:
+            client_name = st.text_input("Име/Наименование *")
+            client_type = st.selectbox("Вид клиент", ["Юридическо лице", "Физическо лице", "Неизвестно"])
+        with col6:
+            client_phone = st.text_input("Телефон")
+            client_eik = st.text_input("ЕИК (за ЮЛ)")
+        with col7:
+            client_email = st.text_input("Email")
             
-        with col_form2:
-            status_selected = st.selectbox("Първоначален Статус", ["Нов", "В процес", "Чака части", "Приключен"])
-            event_date = st.date_input("Дата на сигнала", datetime.date.today())
+        st.subheader("Същност на проблема")
+        col8, col9 = st.columns(2)
+        with col8:
+            case_type = st.selectbox("Касае *", ["Наем", "Продажба", "Ремонт", "Друго"])
+            call_number = st.text_input("Номер на разговора (за аудио запис)")
+        with col9:
+            recommended_action = st.selectbox("Препоръчано действие", ["Корективно", "Организационно", "Санкционно", "Проверка", "Неприложимо"])
             
-        description = st.text_area("Описание на проблема *", placeholder="Опишете подробно какво е съобщил клиентът...")
+        description = st.text_area("Изложение на проблема *", height=120, placeholder="Опишете сбито какъв е проблемът на клиента...")
         
         st.write("*Полетата със звезда са задължителни.*")
-        submit_button = st.form_submit_button("💾 Запиши сигнала", type="primary")
+        submit_button = st.form_submit_button("Запиши сигнала", type="primary")
 
         if submit_button:
-            if not machine_tag or not description:
-                st.error("⚠️ Моля, попълнете Машината и Описанието!")
+            if not company_selected or not client_name or not description:
+                st.error("⚠️ Моля, попълнете Фирма, Име на клиент и Изложение на проблема!")
             else:
                 try:
-                    # Намираме ID-то на избраната фирма
                     company_id = COMPANY_MAP.get(company_selected)
                     
-                    # Сглобяваме "пратката" за базата данни
+                    # Събираме датата и часа в един формат за базата
+                    datetime_str = f"{event_date.strftime('%Y-%m-%d')} {event_time.strftime('%H:%M:%S')}"
+                    
                     new_record = {
+                        "channel": channel,
+                        "event_datetime": datetime_str,
                         "company_id": company_id,
-                        "item_tag": machine_tag,
+                        "client_name": client_name,
+                        "client_phone": client_phone,
+                        "client_email": client_email,
+                        "client_type": client_type,
+                        "client_eik": client_eik,
+                        "case_type": case_type,
+                        "call_number": call_number,
+                        "recommended_action": recommended_action,
                         "description": description,
-                        "status": status_selected,
-                        "event_date": event_date.strftime('%Y-%m-%d %H:%M:%S')
+                        "status": "Постъпил" # Статусът се записва автоматично, както се разбрахме!
                     }
                     
-                    # Пращаме данните в таблицата "complaints"
                     supabase.table("complaints").insert(new_record).execute()
                     
-                    st.success("✅ Сигналът е записан успешно!")
-                    # Презареждаме, за да се изчисти формата
-                    st.rerun() 
+                    st.success("✅ Сигналът е записан успешно и му е зададен статус 'Постъпил'!")
                 except Exception as e:
                     st.error(f"Възникна грешка при запис: {e}")
-
-    st.markdown("---")
-    st.info("💡 Следваща стъпка: Точно под тази форма ще изградим 'Таблото', където екипът ще вижда всички отворени сигнали в таблица и ще може да ги редактира и приключва.")
