@@ -75,9 +75,16 @@ uploaded_file = st.file_uploader("Изберете Excel файл (.xlsx)", type
 
 if uploaded_file is not None:
     try:
-        # Платформата прочита файла
-        df_uploaded = pd.read_excel(uploaded_file)
-        st.success(f"✅ Файлът '{uploaded_file.name}' е разпознат успешно! Намерени са {len(df_uploaded)} реда.")
+        # Четем всички страници (sheets) от файла
+        xls_file = pd.ExcelFile(uploaded_file)
+        
+        # Падащо меню за избор на страница
+        selected_sheet = st.selectbox("Изберете страница (Sheet) с данните:", xls_file.sheet_names)
+        
+        # Зареждаме само избраната страница
+        df_uploaded = pd.read_excel(uploaded_file, sheet_name=selected_sheet)
+        
+        st.success(f"✅ Успешно заредена страница '{selected_sheet}' с {len(df_uploaded)} реда!")
         
         # Показваме първите 10 реда за превю
         st.write("👀 Преглед на първите 10 реда от файла:")
