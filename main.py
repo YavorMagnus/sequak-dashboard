@@ -41,13 +41,16 @@ try:
 except Exception:
     COMPANY_MAP = {}
 
+# УМЕН ПРЕВОДАЧ НА ФИРМИ (вече с RCD!)
 def standardize_company_code(excel_name):
     name = str(excel_name).lower()
     if 'ren' in name: return 'REN'
-    if 'cim' in name and 'cmx' not in name: return 'CIM'
+    # Ако намери RCD или CIM, го насочваме правилно според това какво очаква базата
+    if 'rcd' in name or ('cim' in name and 'cmx' not in name): 
+        return 'CIM' if 'CIM' in COMPANY_MAP else 'RCD'
     if 'mas' in name: return 'MAS'
     if 'cmx' in name: return 'CMX'
-    return 'UNKNOWN'
+    return str(excel_name).upper().strip()
 
 # --- ИЗВЛИЧАНЕ НА ДАННИТЕ ---
 try:
@@ -56,7 +59,6 @@ try:
     
     if not df_pp.empty:
         df_pp['company_code'] = df_pp['companies'].apply(lambda x: x.get('code', 'UNKNOWN').upper() if isinstance(x, dict) else 'UNKNOWN')
-        # ИЗЧИСТВАНЕ НА ИМЕНАТА: Взимаме само името на машината, без "Наем|" или "Поръчка|"
         df_pp['clean_machine'] = df_pp['item_tag'].apply(lambda x: str(x).split('|')[-1].strip() if '|' in str(x) else str(x))
     else:
         df_pp['company_code'] = 'UNKNOWN'
@@ -91,7 +93,8 @@ try:
 
         with tab_all: show_top_10(df_pp)
         with tab_ren: show_top_10(df_pp[df_pp['company_code'] == 'REN'])
-        with tab_cim: show_top_10(df_pp[df_pp['company_code'] == 'CIM'])
+        # Осигуряваме се, че табът CIM ще хване и RCD, ако базата го е запазила така
+        with tab_cim: show_top_10(df_pp[df_pp['company_code'].isin(['CIM', 'RCD'])])
         with tab_mas: show_top_10(df_pp[df_pp['company_code'] == 'MAS'])
         with tab_cmx: show_top_10(df_pp[df_pp['company_code'] == 'CMX'])
 
@@ -142,15 +145,13 @@ if uploaded_file is not None:
                     df_to_insert['total_value_eur'] = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0)
                     df_to_insert['resolution_status'] = df_to_insert['resolution_status'].fillna('Неопределен')
                     
+                    # Магически превод на фирмите - вече включва RCD!
                     df_to_insert['mapped_code'] = df_to_insert['Фирма'].apply(standardize_company_code)
                     df_to_insert['company_id'] = df_to_insert['mapped_code'].map(COMPANY_MAP)
                     
-                    # 🔴 ЗАЩИТА: Махаме всички редове, които са счупени или нямат правилна фирма
+                    # 🔴 ЗАЩИТА
                     df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date', 'company_id'])
-                    
-                    # 🔴 ЗАЩИТА: Изчистваме всякакви останали NaN, които карат JSON да гърми
                     df_to_insert = df_to_insert.replace({float('nan'): None, np.nan: None})
-                    
                     df_to_insert = df_to_insert.drop(columns=['Фирма', 'mapped_code'])
                     
                     records = df_to_insert.to_dict(orient='records')
