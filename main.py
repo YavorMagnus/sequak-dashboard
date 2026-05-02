@@ -52,6 +52,37 @@ def standardize_company_code(excel_name):
     if 'cmx' in name: return 'CMX'
     return str(excel_name).upper().strip()
 
+# --- УМЕН ПАРСЪР ЗА ЧАС ---
+def parse_smart_time(t_str):
+    t_str = str(t_str).strip()
+    
+    # 1. Ако е пейстнато от ексел с двоеточия (14:30 или 14:30:00)
+    if ':' in t_str:
+        parts = t_str.split(':')
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            hh, mm = int(parts[0]), int(parts[1])
+            if 0 <= hh <= 23 and 0 <= mm <= 59:
+                return f"{hh:02d}:{mm:02d}:00"
+        elif len(parts) == 3 and all(p.isdigit() for p in parts):
+            hh, mm, ss = int(parts[0]), int(parts[1]), int(parts[2])
+            if 0 <= hh <= 23 and 0 <= mm <= 59 and 0 <= ss <= 59:
+                return f"{hh:02d}:{mm:02d}:{ss:02d}"
+                
+    # 2. Ако са въведени само цифри бързо от клавиатурата (1430, 930, 143000)
+    clean_str = re.sub(r"\D", "", t_str)
+    if len(clean_str) in [3, 4]:
+        clean_str = clean_str.zfill(4) # Прави 930 на 0930
+        hh, mm = int(clean_str[:2]), int(clean_str[2:])
+        if 0 <= hh <= 23 and 0 <= mm <= 59:
+            return f"{hh:02d}:{mm:02d}:00"
+    elif len(clean_str) in [5, 6]:
+        clean_str = clean_str.zfill(6)
+        hh, mm, ss = int(clean_str[:2]), int(clean_str[2:4]), int(clean_str[4:])
+        if 0 <= hh <= 23 and 0 <= mm <= 59 and 0 <= ss <= 59:
+            return f"{hh:02d}:{mm:02d}:{ss:02d}"
+            
+    return None # Ако нищо от горните не сработи, значи часът е невалиден
+
 # ==========================================================
 # --- СТРАНИЧНО МЕНЮ (SIDEBAR) ---
 # ==========================================================
@@ -201,8 +232,8 @@ elif page == "📝 Регистър Оплаквания (РО)":
         with col3:
             event_date = st.date_input("Дата на сигнала *")
         with col4:
-            # Текстово поле за час с инструкции
-            event_time_str = st.text_input("Час (ЧЧ:ММ:СС) *", placeholder="14:30:00")
+            # Умното текстово поле за час
+            event_time_str = st.text_input("Час (напр. 1430 или 14:30) *", placeholder="Въведете цифри...")
 
         st.subheader("Данни за клиента")
         col5, col6, col7, col8 = st.columns([2, 1, 1, 1])
@@ -214,10 +245,8 @@ elif page == "📝 Регистър Оплаквания (РО)":
             client_eik = st.text_input("ЕИК (за ЮЛ)")
         with col7:
             client_email = st.text_input("Email")
-            # Ново поле за договор с ограничение от 20 символа
             contract_number = st.text_input("Договор/Поръчка №", max_chars=20)
         with col8:
-            # Празна колона за баланс на дизайна
             pass
             
         st.subheader("Същност на проблема")
@@ -234,17 +263,18 @@ elif page == "📝 Регистър Оплаквания (РО)":
         submit_button = st.form_submit_button("Запиши сигнала", type="primary")
 
         if submit_button:
-            # Проверка за формат на часа (Регулярен израз: 00-23 : 00-59 : 00-59)
-            time_pattern = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$")
+            # Прекарваме въведеното през умния парсър
+            formatted_time = parse_smart_time(event_time_str)
             
             if not company_selected or not client_name or not description or not event_time_str:
                 st.error("⚠️ Моля, попълнете Фирма, Дата, Час, Име на клиент и Изложение на проблема!")
-            elif not time_pattern.match(event_time_str):
-                st.error("⚠️ Грешен формат на часа! Моля, въведете часа във формат ЧЧ:ММ:СС (например 09:15:00 или 14:30:00).")
+            elif not formatted_time:
+                st.error("⚠️ Невалиден час! Моля, въведете коректен час (например: 1430, 9:15, 14:30:00).")
             else:
                 try:
                     company_id = COMPANY_MAP.get(company_selected)
-                    datetime_str = f"{event_date.strftime('%Y-%m-%d')} {event_time_str}"
+                    # Използваме вече перфектно форматирания час
+                    datetime_str = f"{event_date.strftime('%Y-%m-%d')} {formatted_time}"
                     
                     new_record = {
                         "channel": channel,
@@ -255,7 +285,7 @@ elif page == "📝 Регистър Оплаквания (РО)":
                         "client_email": client_email,
                         "client_type": client_type,
                         "client_eik": client_eik,
-                        "contract_number": contract_number, # Добавено тук
+                        "contract_number": contract_number,
                         "case_type": case_type,
                         "call_number": call_number,
                         "recommended_action": recommended_action,
@@ -265,6 +295,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
                     
                     supabase.table("complaints").insert(new_record).execute()
                     
-                    st.success("✅ Сигналът е записан успешно и му е зададен статус 'Постъпил'!")
+                    st.success(f"✅ Сигналът е записан успешно! (Разпознат час: {formatted_time})")
                 except Exception as e:
                     st.error(f"Възникна грешка при запис: {e}")
