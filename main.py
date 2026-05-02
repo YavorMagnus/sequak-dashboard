@@ -54,9 +54,10 @@ def standardize_company_code(excel_name):
 
 # --- УМЕН ПАРСЪР ЗА ЧАС ---
 def parse_smart_time(t_str):
+    if not t_str:
+        return None
     t_str = str(t_str).strip()
     
-    # 1. Ако е пейстнато от ексел с двоеточия (14:30 или 14:30:00)
     if ':' in t_str:
         parts = t_str.split(':')
         if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
@@ -68,10 +69,9 @@ def parse_smart_time(t_str):
             if 0 <= hh <= 23 and 0 <= mm <= 59 and 0 <= ss <= 59:
                 return f"{hh:02d}:{mm:02d}:{ss:02d}"
                 
-    # 2. Ако са въведени само цифри бързо от клавиатурата (1430, 930, 143000)
     clean_str = re.sub(r"\D", "", t_str)
     if len(clean_str) in [3, 4]:
-        clean_str = clean_str.zfill(4) # Прави 930 на 0930
+        clean_str = clean_str.zfill(4)
         hh, mm = int(clean_str[:2]), int(clean_str[2:])
         if 0 <= hh <= 23 and 0 <= mm <= 59:
             return f"{hh:02d}:{mm:02d}:00"
@@ -81,7 +81,7 @@ def parse_smart_time(t_str):
         if 0 <= hh <= 23 and 0 <= mm <= 59 and 0 <= ss <= 59:
             return f"{hh:02d}:{mm:02d}:{ss:02d}"
             
-    return None # Ако нищо от горните не сработи, значи часът е невалиден
+    return None
 
 # ==========================================================
 # --- СТРАНИЧНО МЕНЮ (SIDEBAR) ---
@@ -148,7 +148,7 @@ if page == "📊 Оперативен Дашборд":
     st.markdown("---")
     
     st.header("📥 Внос на данни (Пропуснати ползи)")
-    st.write("Пуснете своя работен Excel файл тук. Системата автоматично ще игнорира вече качените дубликати.")
+    st.write("Пуснете своя работен Excel файл тук.")
 
     uploaded_file = st.file_uploader("Изберете Excel файл (.xlsx)", type=["xlsx", "xls"])
 
@@ -222,7 +222,12 @@ elif page == "📝 Регистър Оплаквания (РО)":
     st.write("Форма за въвеждане на нов сигнал от служител (Фаза 1)")
     st.markdown("---")
 
-    with st.form("new_complaint_form", clear_on_submit=True):
+    # Инициализираме ключ в session_state за изчистване на формата
+    if "form_key" not in st.session_state:
+        st.session_state.form_key = 0
+
+    # Премахваме clear_on_submit=True, за да не се чисти при натискане на Enter
+    with st.form(f"new_complaint_form_{st.session_state.form_key}"):
         st.subheader("Основни данни")
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -232,7 +237,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
         with col3:
             event_date = st.date_input("Дата на сигнала *")
         with col4:
-            # Умното текстово поле за час
             event_time_str = st.text_input("Час (напр. 1430 или 14:30) *", placeholder="Въведете цифри...")
 
         st.subheader("Данни за клиента")
@@ -263,7 +267,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
         submit_button = st.form_submit_button("Запиши сигнала", type="primary")
 
         if submit_button:
-            # Прекарваме въведеното през умния парсър
             formatted_time = parse_smart_time(event_time_str)
             
             if not company_selected or not client_name or not description or not event_time_str:
@@ -273,7 +276,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
             else:
                 try:
                     company_id = COMPANY_MAP.get(company_selected)
-                    # Използваме вече перфектно форматирания час
                     datetime_str = f"{event_date.strftime('%Y-%m-%d')} {formatted_time}"
                     
                     new_record = {
@@ -296,5 +298,8 @@ elif page == "📝 Регистър Оплаквания (РО)":
                     supabase.table("complaints").insert(new_record).execute()
                     
                     st.success(f"✅ Сигналът е записан успешно! (Разпознат час: {formatted_time})")
+                    # Увеличаваме ключа, за да накараме Streamlit да преначертае формата празна (ръчно изчистване)
+                    st.session_state.form_key += 1
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Възникна грешка при запис: {e}")
