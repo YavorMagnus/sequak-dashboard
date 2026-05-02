@@ -33,24 +33,35 @@ def init_connection():
 
 supabase: Client = init_connection()
 
-# Зареждаме списъка с фирми от базата, за да ги свържем автоматично
+# Зареждаме списъка с фирми от базата
 try:
     comp_res = supabase.table("companies").select("id, code").execute()
-    # Правим речник, напр: {'REN': '123-id', 'MAS': '456-id'}
     COMPANY_MAP = {row['code'].upper(): row['id'] for row in comp_res.data}
 except Exception:
     COMPANY_MAP = {}
+
+# Умен преводач за имената на фирмите от Ексела
+def standardize_company_code(excel_name):
+    name = str(excel_name).lower()
+    if 'ren' in name: return 'REN'
+    if 'cim' in name and 'cmx' not in name: return 'CIM'
+    if 'mas' in name: return 'MAS'
+    if 'cmx' in name: return 'CMX'
+    return 'UNKNOWN'
 
 # --- ИЗВЛИЧАНЕ НА ДАННИТЕ ---
 try:
     response_pp = supabase.table("missed_profits").select("*, companies(code)").execute()
     df_pp = pd.DataFrame(response_pp.data)
     
-    # Разопаковаме кода на фирмата за табовете
-    if not df_pp.empty and 'companies' in df_pp.columns:
+    if not df_pp.empty:
+        # Разопаковаме кода на фирмата
         df_pp['company_code'] = df_pp['companies'].apply(lambda x: x.get('code', 'UNKNOWN').upper() if isinstance(x, dict) else 'UNKNOWN')
+        # ЧИСТИМ ИМЕТО НА МАШИНАТА (Режем всичко преди последната чертичка '|')
+        df_pp['clean_machine'] = df_pp['item_tag'].apply(lambda x: str(x).split('|')[-1].strip() if '|' in str(x) else str(x))
     else:
         df_pp['company_code'] = 'UNKNOWN'
+        df_pp['clean_machine'] = 'UNKNOWN'
 
     response_ro = supabase.table("complaints").select("*, companies(code)").neq("status", "Приключен").execute()
     df_ro = pd.DataFrame(response_ro.data)
@@ -71,18 +82,15 @@ try:
 
     with col2:
         st.subheader("Топ 10 Машини (по изпусната сума)")
-        
         tab_all, tab_ren, tab_cim, tab_mas, tab_cmx = st.tabs(["Всички", "REN", "CIM", "MAS", "CMX"])
         
-        # Функция за жълтата таблица
         def show_top_10(df_filtered):
-            if df_filtered.empty or 'item_tag' not in df_filtered.columns:
-                st.write("Няма данни за тази фирма.")
+            if df_filtered.empty or 'clean_machine' not in df_filtered.columns:
+                st.write("Няма данни.")
                 return
-            top_10 = df_filtered.groupby('item_tag')['total_value_eur'].sum().nlargest(10).reset_index()
-            top_10.columns = ['Машина / Таг', 'Изпусната сума (€)']
+            top_10 = df_filtered.groupby('clean_machine')['total_value_eur'].sum().nlargest(10).reset_index()
+            top_10.columns = ['Машина', 'Изпусната сума (€)']
             
-            # Оцветяваме буквите и цифрите в жълто!
             styled_df = top_10.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFD700'})
             st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
@@ -94,9 +102,6 @@ try:
 
     st.markdown("---")
 
-    # ==========================================
-    # --- РЕД 2: ОТВОРЕНИ СИГНАЛИ (РО)
-    # ==========================================
     st.subheader("Отворени сигнали (РО)")
     open_cases = len(df_ro) if not df_ro.empty else 0
     st.metric(label="Чакащи реакция", value=f"{open_cases} бр.")
@@ -123,7 +128,6 @@ if uploaded_file is not None:
         if st.button("🚀 ИЗПРАТИ ДАННИТЕ КЪМ БАЗАТА", type="primary"):
             with st.spinner("Анализиране, разпределяне по фирми и запис... моля изчакайте!"):
                 
-                # Търсим и 5-те задължителни колони, включително Фирма
                 required_cols = ['Дата', 'Тагове', 'Обща стойност', 'Резултат', 'Фирма']
                 if all(col in df_uploaded.columns for col in required_cols):
                     df_to_insert = df_uploaded[required_cols].copy()
@@ -146,14 +150,12 @@ if uploaded_file is not None:
                     df_to_insert['total_value_eur'] = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0)
                     df_to_insert['resolution_status'] = df_to_insert['resolution_status'].fillna('Неопределен')
                     
-                    # МАГИЯТА: Автоматично свързване на текста от колона "Фирма" с ID-то в базата данни!
-                    df_to_insert['company_id'] = df_to_insert['Фирма'].astype(str).str.strip().str.upper().map(COMPANY_MAP)
+                    # Магически превод на фирмите (напр. "Mashini.bg" става "MAS", след което взима ID-то)
+                    df_to_insert['mapped_code'] = df_to_insert['Фирма'].apply(standardize_company_code)
+                    df_to_insert['company_id'] = df_to_insert['mapped_code'].map(COMPANY_MAP)
                     
-                    # Изчистваме празните тагове и дати
                     df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date'])
-                    
-                    # Махаме колоната 'Фирма', защото базата ни очаква само 'company_id'
-                    df_to_insert = df_to_insert.drop(columns=['Фирма'])
+                    df_to_insert = df_to_insert.drop(columns=['Фирма', 'mapped_code'])
                     
                     records = df_to_insert.to_dict(orient='records')
                     supabase.table("missed_profits").insert(records).execute()
