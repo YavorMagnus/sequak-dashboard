@@ -96,17 +96,21 @@ if uploaded_file is not None:
                         'Резултат': 'resolution_status'
                     })
                     
-                    # ПРЕВОДАЧ ЗА ОХРАНАТА (ХИТРОСТ 2.0)
-                    def get_transaction_type(tag):
-                        if '|' not in str(tag):
-                            return 'Неопределен'
-                        raw_type = str(tag).split('|')[0].strip()
-                        # Ако в Ексела пише "Поръчка", казваме на базата, че е "Продажба"
-                        if raw_type == 'Поръчка':
+                    # УМЕН ПРЕВОДАЧ ЗА ОХРАНАТА (ХИТРОСТ 3.0)
+                    def get_smart_transaction_type(tag):
+                        tag_str = str(tag)
+                        if 'Наем' in tag_str:
+                            return 'Наем'
+                        elif 'Поръчка' in tag_str or 'Продажба' in tag_str:
                             return 'Продажба'
-                        return raw_type
+                        
+                        # Ако случайно няма нито едно от двете, опитваме старото правило
+                        if '|' not in tag_str:
+                            return 'Неопределен'
+                        raw_type = tag_str.split('|')[0].strip()
+                        return 'Продажба' if raw_type == 'Поръчка' else raw_type
 
-                    df_to_insert['transaction_type'] = df_to_insert['item_tag'].apply(get_transaction_type)
+                    df_to_insert['transaction_type'] = df_to_insert['item_tag'].apply(get_smart_transaction_type)
                     
                     # Оправяме формата на датата
                     df_to_insert['event_date'] = pd.to_datetime(df_to_insert['event_date'], dayfirst=True).dt.strftime('%Y-%m-%d %H:%M:%S')
