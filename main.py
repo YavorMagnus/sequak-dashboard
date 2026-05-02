@@ -86,23 +86,26 @@ if uploaded_file is not None:
         if st.button("🚀 ИЗПРАТИ ДАННИТЕ КЪМ БАЗАТА", type="primary"):
             with st.spinner("Записване в Supabase... моля изчакайте!"):
                 
-                if 'Тагове' in df_uploaded.columns and 'Обща стойност' in df_uploaded.columns and 'Дата' in df_uploaded.columns:
+                # Търсим вече 4 задължителни колони: Дата, Тагове, Обща стойност и Резултат
+                if all(col in df_uploaded.columns for col in ['Дата', 'Тагове', 'Обща стойност', 'Резултат']):
                     
-                    df_to_insert = df_uploaded[['Дата', 'Тагове', 'Обща стойност']].copy()
+                    df_to_insert = df_uploaded[['Дата', 'Тагове', 'Обща стойност', 'Резултат']].copy()
                     df_to_insert = df_to_insert.rename(columns={
                         'Дата': 'event_date',
                         'Тагове': 'item_tag',
-                        'Обща стойност': 'total_value_eur'
+                        'Обща стойност': 'total_value_eur',
+                        'Резултат': 'resolution_status'
                     })
                     
-                    # ХИТРОСТ: Извличаме transaction_type от тага (пр. Наем от Наем|Компресор)
+                    # ХИТРОСТ: Извличаме transaction_type от тага
                     df_to_insert['transaction_type'] = df_to_insert['item_tag'].apply(lambda x: str(x).split('|')[0] if '|' in str(x) else 'Неопределен')
                     
                     # Оправяме формата на датата
                     df_to_insert['event_date'] = pd.to_datetime(df_to_insert['event_date'], dayfirst=True).dt.strftime('%Y-%m-%d %H:%M:%S')
                     
-                    # Почистваме
+                    # Почистваме и застраховаме празните полета
                     df_to_insert['total_value_eur'] = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0)
+                    df_to_insert['resolution_status'] = df_to_insert['resolution_status'].fillna('Неопределен')
                     df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date'])
                     
                     # Записваме
@@ -112,7 +115,7 @@ if uploaded_file is not None:
                     st.success("🎉 Данните са импортирани успешно! Презареждам таблото...")
                     st.rerun() 
                 else:
-                    st.warning("⚠️ Не намирам колоните 'Дата', 'Тагове' или 'Обща стойност'. Моля, уверете се, че сте на правилния sheet.")
+                    st.warning("⚠️ Не намирам всички нужни колони ('Дата', 'Тагове', 'Обща стойност', 'Резултат'). Моля, проверете файла.")
 
     except Exception as e:
         st.error(f"Възникна грешка: {e}")
