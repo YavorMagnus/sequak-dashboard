@@ -34,7 +34,6 @@ def init_connection():
 
 supabase: Client = init_connection()
 
-# Зареждаме ID-тата на фирмите
 try:
     comp_res = supabase.table("companies").select("id, code").execute()
     COMPANY_MAP = {row['code'].upper(): row['id'] for row in comp_res.data}
@@ -50,7 +49,7 @@ def standardize_company_code(excel_name):
     if 'cmx' in name: return 'CMX'
     return str(excel_name).upper().strip()
 
-# --- ИЗВЛИЧАНЕ НА ДАННИТЕ (И ПОДГОТОВКА ЗА ОХРАНАТА) ---
+# --- ИЗВЛИЧАНЕ НА ДАННИТЕ ---
 try:
     response_pp = supabase.table("missed_profits").select("*, companies(code)").execute()
     df_pp = pd.DataFrame(response_pp.data)
@@ -65,7 +64,6 @@ try:
     response_ro = supabase.table("complaints").select("*, companies(code)").neq("status", "Приключен").execute()
     df_ro = pd.DataFrame(response_ro.data)
 
-    # --- ЗАГЛАВИЕ И ДАШБОРД ---
     st.title("🏗️ SequaK - Оперативен Дашборд")
     st.markdown("---")
 
@@ -145,39 +143,36 @@ if uploaded_file is not None:
                     df_to_insert['mapped_code'] = df_to_insert['Фирма'].apply(standardize_company_code)
                     df_to_insert['company_id'] = df_to_insert['mapped_code'].map(COMPANY_MAP)
                     
-                    # Изчистване на счупени редове
                     df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date', 'company_id'])
                     df_to_insert = df_to_insert.replace({float('nan'): None, np.nan: None})
                     
                     # =========================================================
-                    # 🛡️ УМНАТА ОХРАНА ПРОТИВ ДУБЛИКАТИ 🛡️
+                    # 🛡️ ПОДОБРЕНАТА ОХРАНА (вече гледа Час, Минута и Секунда!)
                     # =========================================================
                     
-                    # 1. Взимаме "пръстовите отпечатъци" на вече качените данни
                     existing_fingerprints = set()
                     if not df_pp.empty and 'event_date' in df_pp.columns:
-                        existing_dates = pd.to_datetime(df_pp['event_date']).dt.strftime('%Y-%m-%d')
+                        # Взимаме точния час и минута от базата
+                        existing_dates = pd.to_datetime(df_pp['event_date']).dt.strftime('%Y-%m-%d %H:%M:%S')
                         existing_sigs = df_pp['company_id'].astype(str) + "|" + df_pp['item_tag'].astype(str) + "|" + existing_dates + "|" + df_pp['total_value_eur'].astype(str)
                         existing_fingerprints = set(existing_sigs)
 
-                    # 2. Правим същите отпечатъци за новите данни от Ексела
-                    new_dates = pd.to_datetime(df_to_insert['event_date']).dt.strftime('%Y-%m-%d')
+                    # Правим същите отпечатъци за новите данни с точен час
+                    new_dates = pd.to_datetime(df_to_insert['event_date']).dt.strftime('%Y-%m-%d %H:%M:%S')
                     df_to_insert['fingerprint'] = df_to_insert['company_id'].astype(str) + "|" + df_to_insert['item_tag'].astype(str) + "|" + new_dates + "|" + df_to_insert['total_value_eur'].astype(str)
                     
-                    # 3. Премахваме вътрешните дубликати в самия ексел (ако има)
+                    # Махаме дубликати ВЪТРЕ в самия ексел (ако някой е копирал ред 2 пъти напълно идентично)
                     df_to_insert = df_to_insert.drop_duplicates(subset=['fingerprint'])
                     
-                    # 4. Оставяме САМО тези редове, които ги НЯМА в базата
+                    # Оставяме само новите
                     df_final = df_to_insert[~df_to_insert['fingerprint'].isin(existing_fingerprints)].copy()
                     
-                    # Махаме техническите колони преди запис
                     df_final = df_final.drop(columns=['Фирма', 'mapped_code', 'fingerprint'])
                     
                     # =========================================================
 
-                    # Записваме в базата само ако има нови неща
                     if df_final.empty:
-                        st.info("⚠️ Всички тези данни вече са качени в базата! Няма нови записи за добавяне. (Охраната Ви предпази от дублиране)")
+                        st.info("⚠️ Всички тези данни вече са качени в базата! Няма нови записи за добавяне.")
                     else:
                         records = df_final.to_dict(orient='records')
                         supabase.table("missed_profits").insert(records).execute()
