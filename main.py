@@ -86,10 +86,8 @@ if uploaded_file is not None:
         if st.button("🚀 ИЗПРАТИ ДАННИТЕ КЪМ БАЗАТА", type="primary"):
             with st.spinner("Записване в Supabase... моля изчакайте!"):
                 
-                # Проверяваме дали това е файлът с Пропуснати Ползи (вече търсим и Дата)
                 if 'Тагове' in df_uploaded.columns and 'Обща стойност' in df_uploaded.columns and 'Дата' in df_uploaded.columns:
                     
-                    # Взимаме Дата, Тагове и Стойност
                     df_to_insert = df_uploaded[['Дата', 'Тагове', 'Обща стойност']].copy()
                     df_to_insert = df_to_insert.rename(columns={
                         'Дата': 'event_date',
@@ -97,10 +95,13 @@ if uploaded_file is not None:
                         'Обща стойност': 'total_value_eur'
                     })
                     
-                    # Оправяме формата на датата, за да се хареса на базата данни (Година-Месец-Ден)
+                    # ХИТРОСТ: Извличаме transaction_type от тага (пр. Наем от Наем|Компресор)
+                    df_to_insert['transaction_type'] = df_to_insert['item_tag'].apply(lambda x: str(x).split('|')[0] if '|' in str(x) else 'Неопределен')
+                    
+                    # Оправяме формата на датата
                     df_to_insert['event_date'] = pd.to_datetime(df_to_insert['event_date'], dayfirst=True).dt.strftime('%Y-%m-%d %H:%M:%S')
                     
-                    # Почистваме от празни редове
+                    # Почистваме
                     df_to_insert['total_value_eur'] = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0)
                     df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date'])
                     
