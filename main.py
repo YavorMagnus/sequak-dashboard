@@ -86,7 +86,6 @@ if uploaded_file is not None:
         if st.button("🚀 ИЗПРАТИ ДАННИТЕ КЪМ БАЗАТА", type="primary"):
             with st.spinner("Записване в Supabase... моля изчакайте!"):
                 
-                # Търсим вече 4 задължителни колони: Дата, Тагове, Обща стойност и Резултат
                 if all(col in df_uploaded.columns for col in ['Дата', 'Тагове', 'Обща стойност', 'Резултат']):
                     
                     df_to_insert = df_uploaded[['Дата', 'Тагове', 'Обща стойност', 'Резултат']].copy()
@@ -97,8 +96,17 @@ if uploaded_file is not None:
                         'Резултат': 'resolution_status'
                     })
                     
-                    # ХИТРОСТ: Извличаме transaction_type от тага
-                    df_to_insert['transaction_type'] = df_to_insert['item_tag'].apply(lambda x: str(x).split('|')[0] if '|' in str(x) else 'Неопределен')
+                    # ПРЕВОДАЧ ЗА ОХРАНАТА (ХИТРОСТ 2.0)
+                    def get_transaction_type(tag):
+                        if '|' not in str(tag):
+                            return 'Неопределен'
+                        raw_type = str(tag).split('|')[0].strip()
+                        # Ако в Ексела пише "Поръчка", казваме на базата, че е "Продажба"
+                        if raw_type == 'Поръчка':
+                            return 'Продажба'
+                        return raw_type
+
+                    df_to_insert['transaction_type'] = df_to_insert['item_tag'].apply(get_transaction_type)
                     
                     # Оправяме формата на датата
                     df_to_insert['event_date'] = pd.to_datetime(df_to_insert['event_date'], dayfirst=True).dt.strftime('%Y-%m-%d %H:%M:%S')
