@@ -17,6 +17,10 @@ st.markdown("""
         border-radius: 8px;
         box-shadow: 0 4px 6px rgba(255, 215, 0, 0.1);
     }
+    /* Стилизиране на табовете */
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
+    .stTabs [data-baseweb="tab"] { background-color: #222222; border-radius: 4px; padding: 10px 20px; color: #FFFFFF; }
+    .stTabs [aria-selected="true"] { background-color: #FFD700 !important; color: #111111 !important; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -42,8 +46,10 @@ try:
     response_ro = supabase.table("complaints").select("*, companies(code)").neq("status", "Приключен").execute()
     df_ro = pd.DataFrame(response_ro.data)
 
-    # --- ВИЗУАЛИЗАЦИЯ НА ДАШБОРДА ---
-    col1, col2, col3 = st.columns(3)
+    # ==========================================
+    # --- РЕД 1: ПРОПУСНАТИ ПОЛЗИ (CENTER STAGE)
+    # ==========================================
+    col1, col2 = st.columns([1, 2.5]) # Лявата колона е по-тясна, дясната е широка за класацията
 
     with col1:
         st.subheader("Пропуснати ползи")
@@ -51,23 +57,48 @@ try:
         st.metric(label="Общо пропуски (EUR)", value=f"€ {total_eur:,.2f}")
 
     with col2:
-        st.subheader("Отворени сигнали (РО)")
-        open_cases = len(df_ro) if not df_ro.empty else 0
-        st.metric(label="Чакащи реакция", value=f"{open_cases} бр.")
+        st.subheader("Топ 10 Машини (по изпусната сума)")
+        
+        # Създаваме табове за фирмите
+        tab_all, tab_ren, tab_cim, tab_mas, tab_cmx = st.tabs(["Всички (Глобално)", "REN", "CIM", "MAS", "CMX"])
+        
+        with tab_all:
+            if not df_pp.empty and 'item_tag' in df_pp.columns and 'total_value_eur' in df_pp.columns:
+                # Групираме по машина, сумираме парите, сортираме и взимаме топ 10
+                top_10_df = df_pp.groupby('item_tag')['total_value_eur'].sum().nlargest(10).reset_index()
+                top_10_df.columns = ['Машина / Таг', 'Изпусната сума (€)']
+                
+                # Показваме красива таблица
+                st.dataframe(
+                    top_10_df.style.format({'Изпусната сума (€)': '€ {:,.2f}'}), 
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.write("Няма достатъчно данни за класация.")
+                
+        # Засега другите табове са празни, докато не добавим фирмата в импорта
+        with tab_ren: st.info("Данните за REN ще се появят тук, след като настроим импорта да разпознава фирмите.")
+        with tab_cim: st.info("Данните за CIM ще се появят тук, след като настроим импорта да разпознава фирмите.")
+        with tab_mas: st.info("Данните за MAS ще се появят тук, след като настроим импорта да разпознава фирмите.")
+        with tab_cmx: st.info("Данните за CMX ще се появят тук, след като настроим импорта да разпознава фирмите.")
 
-    with col3:
-        st.subheader("Топ 5 Машини (РПП)")
-        if not df_pp.empty and 'item_tag' in df_pp.columns:
-            st.dataframe(df_pp['item_tag'].value_counts().head(5), use_container_width=True)
-        else:
-            st.write("Няма данни.")
+    st.markdown("---")
+
+    # ==========================================
+    # --- РЕД 2: ОТВОРЕНИ СИГНАЛИ (РО)
+    # ==========================================
+    st.subheader("Отворени сигнали (РО)")
+    open_cases = len(df_ro) if not df_ro.empty else 0
+    st.metric(label="Чакащи реакция", value=f"{open_cases} бр.")
+    # Тук по-късно можем да добавим и таблица с най-спешните сигнали
 
 except Exception as e:
     st.error(f"Възникна грешка при връзката с базата: {e}")
 
 st.markdown("---")
 
-# --- НОВА СЕКЦИЯ: ИМПОРТ НА ДАННИ ---
+# --- СЕКЦИЯ: ИМПОРТ НА ДАННИ (Остава същата) ---
 st.header("📥 Внос на данни")
 st.write("Пуснете своя работен Excel файл тук. Системата автоматично ще разпознае данните.")
 
@@ -80,54 +111,36 @@ if uploaded_file is not None:
         df_uploaded = pd.read_excel(uploaded_file, sheet_name=selected_sheet)
         
         st.success(f"✅ Заредена страница '{selected_sheet}' с {len(df_uploaded)} реда. Готови за запис!")
-        st.dataframe(df_uploaded.head(5), use_container_width=True)
         
-        # --- БУТОН ЗА ЗАПИС В БАЗАТА ---
         if st.button("🚀 ИЗПРАТИ ДАННИТЕ КЪМ БАЗАТА", type="primary"):
             with st.spinner("Записване в Supabase... моля изчакайте!"):
-                
                 if all(col in df_uploaded.columns for col in ['Дата', 'Тагове', 'Обща стойност', 'Резултат']):
-                    
                     df_to_insert = df_uploaded[['Дата', 'Тагове', 'Обща стойност', 'Резултат']].copy()
                     df_to_insert = df_to_insert.rename(columns={
-                        'Дата': 'event_date',
-                        'Тагове': 'item_tag',
-                        'Обща стойност': 'total_value_eur',
-                        'Резултат': 'resolution_status'
+                        'Дата': 'event_date', 'Тагове': 'item_tag',
+                        'Обща стойност': 'total_value_eur', 'Резултат': 'resolution_status'
                     })
                     
-                    # УМЕН ПРЕВОДАЧ ЗА ОХРАНАТА (ХИТРОСТ 3.0)
                     def get_smart_transaction_type(tag):
                         tag_str = str(tag)
-                        if 'Наем' in tag_str:
-                            return 'Наем'
-                        elif 'Поръчка' in tag_str or 'Продажба' in tag_str:
-                            return 'Продажба'
-                        
-                        # Ако случайно няма нито едно от двете, опитваме старото правило
-                        if '|' not in tag_str:
-                            return 'Неопределен'
+                        if 'Наем' in tag_str: return 'Наем'
+                        elif 'Поръчка' in tag_str or 'Продажба' in tag_str: return 'Продажба'
+                        if '|' not in tag_str: return 'Неопределен'
                         raw_type = tag_str.split('|')[0].strip()
                         return 'Продажба' if raw_type == 'Поръчка' else raw_type
 
                     df_to_insert['transaction_type'] = df_to_insert['item_tag'].apply(get_smart_transaction_type)
-                    
-                    # Оправяме формата на датата
                     df_to_insert['event_date'] = pd.to_datetime(df_to_insert['event_date'], dayfirst=True).dt.strftime('%Y-%m-%d %H:%M:%S')
-                    
-                    # Почистваме и застраховаме празните полета
                     df_to_insert['total_value_eur'] = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0)
                     df_to_insert['resolution_status'] = df_to_insert['resolution_status'].fillna('Неопределен')
                     df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date'])
                     
-                    # Записваме
                     records = df_to_insert.to_dict(orient='records')
                     supabase.table("missed_profits").insert(records).execute()
                     
                     st.success("🎉 Данните са импортирани успешно! Презареждам таблото...")
                     st.rerun() 
                 else:
-                    st.warning("⚠️ Не намирам всички нужни колони ('Дата', 'Тагове', 'Обща стойност', 'Резултат'). Моля, проверете файла.")
-
+                    st.warning("⚠️ Не намирам всички нужни колони ('Дата', 'Тагове', 'Обща стойност', 'Резултат').")
     except Exception as e:
         st.error(f"Възникна грешка: {e}")
