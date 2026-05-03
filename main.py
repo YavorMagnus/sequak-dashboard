@@ -22,7 +22,7 @@ st.markdown("""
     
     /* Стилизиране на хронологията и второстепенния стрийм */
     .history-card { background-color: #333333; padding: 10px; border-left: 3px solid #FFD700; margin-bottom: 10px; border-radius: 4px; }
-    .client-stream { background-color: #0d2136; padding: 20px; border-radius: 8px; border-left: 5px solid #00aaff; margin-top: 20px; box-shadow: 0 2px 4px rgba(0,170,255,0.1); }
+    .client-stream { background-color: #0d2136; padding: 20px; border-radius: 8px; border-left: 5px solid #00aaff; margin-top: 10px; box-shadow: 0 2px 4px rgba(0,170,255,0.1); }
     .client-stream h4 { color: #00aaff; margin-top: 0; }
     </style>
     """, unsafe_allow_html=True)
@@ -103,7 +103,6 @@ def show_ticket_details(ticket):
     with col2:
         st.write(f"**Договор №:** {ticket.get('contract_number', '-')}")
         st.write(f"**Машина/и:** {ticket.get('machines', '-')}")
-        st.write(f"**Работа с клиент:** {'Да 🔴' if ticket.get('client_action_needed') else 'Не'}")
     
     st.info(f"**Описание:** {ticket.get('description', '')}")
     st.markdown("---")
@@ -133,11 +132,29 @@ def show_ticket_details(ticket):
     # =========================================================
     # --- ВТОРОСТЕПЕНЕН СТРИЙМ: РАБОТА С КЛИЕНТ (СИНЯ ЗОНА) ---
     # =========================================================
-    if ticket.get('client_action_needed'):
-        st.markdown('<div class="client-stream"><h4>🤝 Комуникация с клиент (Външен процес)</h4>', unsafe_allow_html=True)
+    st.subheader("🤝 Комуникация с клиент (Външен процес)")
+    
+    # ДИНАМИЧЕН ШАЛТЕР (TOGGLE)
+    current_client_action = ticket.get('client_action_needed', False)
+    new_client_action = st.toggle("Извънреден диспут: Очаква се действие с клиента", value=current_client_action, key=f"tgl_{ticket['id']}")
+    
+    # Логика за запазване при промяна на шалтера
+    if new_client_action != current_client_action:
+        supabase.table("complaints").update({"client_action_needed": new_client_action}).eq("id", ticket['id']).execute()
+        action_text = "Активиран" if new_client_action else "Дезактивиран"
+        supabase.table("complaint_history").insert({
+            "complaint_id": ticket['id'],
+            "action_type": f"Диспут с клиент: {action_text}",
+            "created_by": "Контролинг"
+        }).execute()
+        st.rerun()
+
+    # Ако е активиран, показваме синята зона за работа
+    if new_client_action:
+        st.markdown('<div class="client-stream"><h4>Въвеждане на комуникация</h4>', unsafe_allow_html=True)
         
         client_step = st.selectbox(
-            "Изберете етап на комуникация", 
+            "Изберете етап", 
             ["1. Изпратен мейл до О.К.", "2. Предложение към клиент (от О.К.)", "3. Удовлетвореност (Финал)"],
             key=f"cs_{ticket['id']}"
         )
@@ -147,7 +164,7 @@ def show_ticket_details(ticket):
         
         if client_step == "1. Изпратен мейл до О.К.":
             mail_date = st.date_input("Дата на мейла", key=f"md_{ticket['id']}")
-            c_details = f"Изпратен имейл на: {mail_date}"
+            c_details = f"Изпратен имейл на: {mail_date.strftime('%d.%m.%Y')}"
         elif client_step == "2. Предложение към клиент (от О.К.)":
             c_details = st.text_area("Въведете направеното предложение", key=f"pt_{ticket['id']}")
             c_deadline = st.date_input("Очакван отговор до (Срок)", key=f"pd_{ticket['id']}")
@@ -165,10 +182,12 @@ def show_ticket_details(ticket):
                 "created_by": "Контролинг"
             }
             supabase.table("complaint_history").insert(history_payload).execute()
-            st.success("Действието с клиента е записано!")
+            st.success("Действието с клиента е записано в хронологията!")
             st.rerun()
             
-        st.markdown('</div><br>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("---")
 
     # =========================================================
     # --- ГЛАВЕН СТРИЙМ: КОНТРОЛИНГ (ВЪТРЕШЕН ПРОЦЕС) ---
@@ -262,8 +281,7 @@ def show_company_tickets(company_code, df_complaints):
                 
         colA, colB, colC = st.columns([3, 2, 1])
         with colA:
-            # Слагаме ярък бадж, ако сигналът е в диспут с клиент
-            client_display = f"👤 **{client}**" + (" <span style='color:red;'>🔴 [Контакт]</span>" if has_client_action else "")
+            client_display = f"👤 **{client}**" + (" <span style='color:#00aaff;'>🔵 [В диспут]</span>" if has_client_action else "")
             st.markdown(client_display, unsafe_allow_html=True)
             st.caption(f"Дата: {row.get('event_datetime', '')}")
         with colB:
@@ -405,6 +423,7 @@ elif page == "📝 Регистър Оплаквания (РО)":
         st.markdown("### Активно следене на процеси по фирми")
         st.caption("Кликнете върху бутона под дадена фирма, за да видите детайли и просрочия.")
         
+        # Подготовка на данните
         try:
             res = supabase.table("complaints").select("*, companies(code)").execute()
             df_complaints = pd.DataFrame(res.data)
@@ -414,34 +433,36 @@ elif page == "📝 Регистър Оплаквания (РО)":
             st.error(f"Грешка при връзка с DB: {e}")
             df_complaints = pd.DataFrame()
 
-        cols = st.columns(len(COMPANY_LIST))
+        # Създаване на GRID (Мрежа) - по 4 фирми на ред
+        NUM_COLS_PER_ROW = 4
+        cols = st.columns(NUM_COLS_PER_ROW)
+        
         for i, comp in enumerate(COMPANY_LIST):
-            with cols[i]:
-                st.markdown(f"<h4 style='text-align: center; color: white;'>{comp}</h4>", unsafe_allow_html=True)
-                
-                if not df_complaints.empty and 'Фирма' in df_complaints.columns:
-                    comp_data = df_complaints[df_complaints['Фирма'] == comp]
-                    unresolved = len(comp_data[comp_data['current_status'] != 'Приключено'])
+            with cols[i % NUM_COLS_PER_ROW]:
+                # Използваме st.container с рамка за елегантен "Card" дизайн
+                with st.container(border=True):
+                    st.markdown(f"<h3 style='text-align: center; color: #FFD700; margin-top: 0;'>{comp}</h3>", unsafe_allow_html=True)
                     
-                    # Изчисляване на просрочени и диспути
-                    overdue = 0
-                    in_dispute = len(comp_data[(comp_data['current_status'] != 'Приключено') & (comp_data['client_action_needed'] == True)])
+                    if not df_complaints.empty and 'Фирма' in df_complaints.columns:
+                        comp_data = df_complaints[df_complaints['Фирма'] == comp]
+                        unresolved = len(comp_data[comp_data['current_status'] != 'Приключено'])
+                        in_dispute = len(comp_data[(comp_data['current_status'] != 'Приключено') & (comp_data['client_action_needed'] == True)])
+                        overdue = 0
+                        for _, row in comp_data.iterrows():
+                            if row.get('current_status') != 'Приключено' and row.get('current_deadline'):
+                                if pd.to_datetime(row['current_deadline']).date() < datetime.date.today():
+                                    overdue += 1
+                    else:
+                        unresolved, overdue, in_dispute = 0, 0, 0
                     
-                    for _, row in comp_data.iterrows():
-                        if row.get('current_status') != 'Приключено' and row.get('current_deadline'):
-                            if pd.to_datetime(row['current_deadline']).date() < datetime.date.today():
-                                overdue += 1
-                else:
-                    unresolved, overdue, in_dispute = 0, 0, 0
-                
-                # Трите ключови метрики
-                m_col1, m_col2, m_col3 = st.columns(3)
-                with m_col1: st.metric("Неприключени", unresolved)
-                with m_col2: st.metric("Просрочени", overdue)
-                with m_col3: st.metric("В диспут", in_dispute)
-                
-                if st.button(f"🔍 Отвори {comp}", key=f"open_dash_{comp}", use_container_width=True):
-                    show_company_tickets(comp, df_complaints)
+                    # Изчистено вертикално подреждане
+                    st.write(f"**Неприключени:** {unresolved} бр.")
+                    st.write(f"**Просрочени:** {'🔴 ' + str(overdue) if overdue > 0 else '0'} бр.")
+                    st.write(f"**В диспут:** {'🔵 ' + str(in_dispute) if in_dispute > 0 else '0'} бр.")
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button(f"🔍 Отвори списък", key=f"open_dash_{comp}", use_container_width=True):
+                        show_company_tickets(comp, df_complaints)
     
     # ==========================================
     # --- ТАБ 2: ВЪВЕЖДАНЕ (ПЪРВИЧЕН КАРТОН) ---
