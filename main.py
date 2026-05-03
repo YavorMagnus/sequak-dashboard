@@ -253,19 +253,24 @@ def show_ticket_details(ticket):
             st.rerun()
 
 # ==========================================================
-# --- ПОПЪП ДИАЛОЗ: СПИСЪК СЪС СИГНАЛИ ---
+# --- ФУНКЦИЯ ЗА РЕНДЕРИРАНЕ НА СПИСЪК (ВЕЧЕ НЕ Е ПОП-ЪП) ---
 # ==========================================================
-@st.dialog("Списък със сигнали")
 def show_company_tickets(company_code, df_complaints):
-    st.subheader(f"Всички сигнали за {company_code}")
-    
+    col_title, col_btn = st.columns([4, 1])
+    with col_title:
+        st.subheader(f"📋 Всички сигнали за {company_code}")
+    with col_btn:
+        if st.button("✖ Затвори списъка", use_container_width=True):
+            st.session_state.active_company = None
+            st.rerun()
+            
     if df_complaints.empty:
         st.write("Няма данни.")
         return
         
     comp_df = df_complaints[df_complaints['Фирма'] == company_code].sort_values(by="event_datetime", ascending=False)
     if comp_df.empty:
-        st.write("Няма данни.")
+        st.info("Няма регистрирани сигнали за тази фирма.")
         return
 
     for _, row in comp_df.iterrows():
@@ -303,7 +308,7 @@ st.sidebar.markdown("---")
 st.sidebar.caption("Входът е защитен. Версия 2.0")
 
 # ==========================================================
-# --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (БЕЗ ПРОМЕНИ!) ---
+# --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД ---
 # ==========================================================
 if page == "📊 Оперативен Дашборд":
     try:
@@ -316,10 +321,7 @@ if page == "📊 Оперативен Дашборд":
             df_pp['company_code'] = 'UNKNOWN'
             df_pp['clean_machine'] = 'UNKNOWN'
 
-        response_ro = supabase.table("complaints").select("id").neq("current_status", "Приключено").execute()
-        open_cases = len(response_ro.data)
-
-        st.title("📊 Оперативен Дашборд")
+        st.title("📊 Оперативен Дашборд (ПП)")
         st.markdown("---")
         col1, col2 = st.columns([1, 2.5])
         with col1:
@@ -344,9 +346,6 @@ if page == "📊 Оперативен Дашборд":
             with tab_mas: show_top_10(df_pp[df_pp['company_code'] == 'MAS'])
             with tab_cmx: show_top_10(df_pp[df_pp['company_code'] == 'CMX'])
 
-        st.markdown("---")
-        st.subheader("Отворени сигнали (РО)")
-        st.metric(label="Чакащи реакция", value=f"{open_cases} бр.")
     except Exception as e:
         st.error(f"Възникна грешка: {e}")
 
@@ -409,11 +408,15 @@ if page == "📊 Оперативен Дашборд":
             st.error(f"Възникна грешка: {e}")
 
 # ==========================================================
-# --- СТРАНИЦА 2: РЕГИСТЪР ОПЛАКВАНИЯ (РО) - НОВ ДИЗАЙН ---
+# --- СТРАНИЦА 2: РЕГИСТЪР ОПЛАКВАНИЯ (РО) ---
 # ==========================================================
 elif page == "📝 Регистър Оплаквания (РО)":
     st.title("📝 Управление на Сигнали (РО) - Фаза 2")
     
+    # Инициализация на сесия за отворен списък
+    if 'active_company' not in st.session_state:
+        st.session_state.active_company = None
+        
     tab_list, tab_new = st.tabs(["👁️ Птичи поглед (Дашборд)", "➕ Въвеждане на нов сигнал"])
     
     # ==========================================
@@ -423,7 +426,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
         st.markdown("### Активно следене на процеси по фирми")
         st.caption("Кликнете върху бутона под дадена фирма, за да видите детайли и просрочия.")
         
-        # Подготовка на данните
         try:
             res = supabase.table("complaints").select("*, companies(code)").execute()
             df_complaints = pd.DataFrame(res.data)
@@ -433,13 +435,11 @@ elif page == "📝 Регистър Оплаквания (РО)":
             st.error(f"Грешка при връзка с DB: {e}")
             df_complaints = pd.DataFrame()
 
-        # Създаване на GRID (Мрежа) - по 4 фирми на ред
         NUM_COLS_PER_ROW = 4
         cols = st.columns(NUM_COLS_PER_ROW)
         
         for i, comp in enumerate(COMPANY_LIST):
             with cols[i % NUM_COLS_PER_ROW]:
-                # Използваме st.container с рамка за елегантен "Card" дизайн
                 with st.container(border=True):
                     st.markdown(f"<h3 style='text-align: center; color: #FFD700; margin-top: 0;'>{comp}</h3>", unsafe_allow_html=True)
                     
@@ -455,15 +455,20 @@ elif page == "📝 Регистър Оплаквания (РО)":
                     else:
                         unresolved, overdue, in_dispute = 0, 0, 0
                     
-                    # Изчистено вертикално подреждане
                     st.write(f"**Неприключени:** {unresolved} бр.")
                     st.write(f"**Просрочени:** {'🔴 ' + str(overdue) if overdue > 0 else '0'} бр.")
                     st.write(f"**В диспут:** {'🔵 ' + str(in_dispute) if in_dispute > 0 else '0'} бр.")
                     
                     st.markdown("<br>", unsafe_allow_html=True)
                     if st.button(f"🔍 Отвори списък", key=f"open_dash_{comp}", use_container_width=True):
-                        show_company_tickets(comp, df_complaints)
-    
+                        st.session_state.active_company = comp
+                        st.rerun()
+
+        # Показване на списъка извън поп-ъп, ако има избрана фирма
+        if st.session_state.active_company:
+            st.markdown("---")
+            show_company_tickets(st.session_state.active_company, df_complaints)
+            
     # ==========================================
     # --- ТАБ 2: ВЪВЕЖДАНЕ (ПЪРВИЧЕН КАРТОН) ---
     # ==========================================
