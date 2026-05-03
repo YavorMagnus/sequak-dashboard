@@ -279,9 +279,12 @@ def show_company_tickets(company_code, df_complaints):
         has_client_action = row.get('client_action_needed', False)
         
         is_overdue = False
-        deadline = row.get('current_deadline')
-        if deadline and status != "Приключено":
-            if pd.to_datetime(deadline).date() < datetime.date.today():
+        deadline_val = row.get('current_deadline')
+        
+        # ЗАЩИТА: Проверяваме дали срокът съществува и е валиден преди да го конвертираме
+        if pd.notna(deadline_val) and status != "Приключено":
+            dt_obj = pd.to_datetime(deadline_val, errors='coerce')
+            if pd.notna(dt_obj) and dt_obj.date() < datetime.date.today():
                 is_overdue = True
                 
         colA, colB, colC = st.columns([3, 2, 1])
@@ -449,8 +452,11 @@ elif page == "📝 Регистър Оплаквания (РО)":
                         in_dispute = len(comp_data[(comp_data['current_status'] != 'Приключено') & (comp_data['client_action_needed'] == True)])
                         overdue = 0
                         for _, row in comp_data.iterrows():
-                            if row.get('current_status') != 'Приключено' and row.get('current_deadline'):
-                                if pd.to_datetime(row['current_deadline']).date() < datetime.date.today():
+                            dl_val = row.get('current_deadline')
+                            # ЗАЩИТА: Проверяваме и тук дали срокът е валиден
+                            if row.get('current_status') != 'Приключено' and pd.notna(dl_val):
+                                dt_obj = pd.to_datetime(dl_val, errors='coerce')
+                                if pd.notna(dt_obj) and dt_obj.date() < datetime.date.today():
                                     overdue += 1
                     else:
                         unresolved, overdue, in_dispute = 0, 0, 0
