@@ -387,7 +387,7 @@ def show_company_tickets(company_code, df_complaints):
 st.sidebar.title("🏗️ SequaK Меню")
 page = st.sidebar.radio("Изберете модул:", ["📊 Оперативен Дашборд (ПП)", "📝 Регистър Оплаквания (РО)", "📈 Анализи и Справки (РО)"])
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 2.2")
+st.sidebar.caption("Входът е защитен. Версия 2.3")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -725,7 +725,6 @@ elif page == "📈 Анализи и Справки (РО)":
         df_comp = pd.DataFrame()
         df_hist = pd.DataFrame()
 
-    # ПОПРАВКАТА: Проверяваме САМО дали има данни в главната таблица. Историята може и да е празна.
     if df_comp.empty:
         st.info("⚠️ Няма достатъчно данни в системата за генериране на справки.")
     else:
@@ -915,7 +914,7 @@ elif page == "📈 Анализи и Справки (РО)":
                     if 'companies' in export_df.columns:
                         export_df = export_df.drop(columns=['companies'])
                     
-                    for col in export_df.select_dtypes(include=['datetime64[ns, UTC]', 'datetime64[ns, tz]', 'datetimetz']).columns:
+                    for col in export_df.select_dtypes(include=['datetimetz']).columns:
                         export_df[col] = export_df[col].dt.tz_localize(None)
                         
                     with col_ex2:
