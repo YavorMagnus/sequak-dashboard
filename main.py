@@ -397,7 +397,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 3.3")
+st.sidebar.caption("Входът е защитен. Версия 3.4")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -482,12 +482,11 @@ if page == "📊 Оперативен Дашборд (ПП)":
                             'Не предлагаме (Бр.)'
                         ]
                         
-                        # --- ДОБАВЯНЕ НА ТОТАЛИ (ПО РЕДОВЕ И КОЛОНИ) ---
                         # Тотали най-вдясно
                         status_summary['Общо (Бр.)'] = status_summary['Отказва се (Бр.)'] + status_summary['Няма наличност (Бр.)'] + status_summary['Не предлагаме (Бр.)']
                         status_summary['Общо (€)'] = status_summary['Отказва се (€)'] + status_summary['Няма наличност (€)']
                         
-                        # Тотали най-долу (нов ред ОБЩО)
+                        # Тотали най-долу
                         total_row = pd.DataFrame({
                             'Фирма': ['ОБЩО'],
                             'Отказва се (Бр.)': [status_summary['Отказва се (Бр.)'].sum()],
@@ -501,7 +500,6 @@ if page == "📊 Оперативен Дашборд (ПП)":
                         
                         status_summary = pd.concat([status_summary, total_row], ignore_index=True)
 
-                        # Стилизиране с новото златно форматиране
                         styled_status = status_summary.style.format({
                             'Отказва се (€)': '€ {:,.2f}',
                             'Няма наличност (€)': '€ {:,.2f}',
@@ -533,10 +531,7 @@ if page == "📊 Оперативен Дашборд (ПП)":
                         return
                     top_10 = df_to_show.groupby('clean_machine')['total_value_eur'].sum().nlargest(10).reset_index()
                     top_10.columns = ['Машина', 'Изпусната сума (€)']
-                    
-                    # --- ТУК Е ПРОМЯНАТА ЗА ЗЛАТНИТЕ БУКВИ ---
                     styled_df = top_10.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFD700'})
-                    
                     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
                 with tab_all: show_top_10(df_filtered)
@@ -583,14 +578,31 @@ if page == "📊 Оперативен Дашборд (ПП)":
                             df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date', 'company_id'])
                             df_to_insert = df_to_insert.replace({float('nan'): None, np.nan: None})
                             
+                            # --- НОВ БРОНИРАН ФИЛТЪР ЗА ДУБЛИКАТИ ---
                             existing_fingerprints = set()
                             if not df_pp.empty and 'event_date' in df_pp.columns:
-                                existing_dates = pd.to_datetime(df_pp['event_date']).dt.strftime('%Y-%m-%d %H:%M:%S')
-                                existing_sigs = df_pp['company_id'].astype(str) + "|" + df_pp['item_tag'].astype(str) + "|" + existing_dates + "|" + df_pp['total_value_eur'].astype(str)
+                                temp_existing_dates = pd.to_datetime(df_pp['event_date'], errors='coerce')
+                                if temp_existing_dates.dt.tz is not None:
+                                    temp_existing_dates = temp_existing_dates.dt.tz_localize(None)
+                                # Игнорираме секундите (%H:%M вместо %H:%M:%S)
+                                existing_dates = temp_existing_dates.dt.strftime('%Y-%m-%d %H:%M')
+                                # Уеднаквяваме малки/главни букви и махаме празни места
+                                existing_tags = df_pp['item_tag'].astype(str).str.strip().str.lower()
+                                # Твърдо закръгляне до 2 знака след запетаята
+                                existing_vals = pd.to_numeric(df_pp['total_value_eur'], errors='coerce').fillna(0).round(2).apply(lambda x: f"{x:.2f}")
+                                
+                                existing_sigs = df_pp['company_id'].astype(str) + "|" + existing_tags + "|" + existing_dates + "|" + existing_vals
                                 existing_fingerprints = set(existing_sigs)
 
-                            new_dates = pd.to_datetime(df_to_insert['event_date']).dt.strftime('%Y-%m-%d %H:%M:%S')
-                            df_to_insert['fingerprint'] = df_to_insert['company_id'].astype(str) + "|" + df_to_insert['item_tag'].astype(str) + "|" + new_dates + "|" + df_to_insert['total_value_eur'].astype(str)
+                            temp_new_dates = pd.to_datetime(df_to_insert['event_date'], errors='coerce')
+                            if temp_new_dates.dt.tz is not None:
+                                temp_new_dates = temp_new_dates.dt.tz_localize(None)
+                            new_dates = temp_new_dates.dt.strftime('%Y-%m-%d %H:%M')
+                            new_tags = df_to_insert['item_tag'].astype(str).str.strip().str.lower()
+                            new_vals = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0).round(2).apply(lambda x: f"{x:.2f}")
+                            
+                            df_to_insert['fingerprint'] = df_to_insert['company_id'].astype(str) + "|" + new_tags + "|" + new_dates + "|" + new_vals
+                            # ----------------------------------------
                             
                             df_to_insert = df_to_insert.drop_duplicates(subset=['fingerprint'])
                             df_final = df_to_insert[~df_to_insert['fingerprint'].isin(existing_fingerprints)].copy()
@@ -608,9 +620,7 @@ if page == "📊 Оперативен Дашборд (ПП)":
             except Exception as e:
                 st.error(f"Възникна грешка: {e}")
 
-# ==========================================================
-# --- СТРАНИЦА 2: РЕГИСТЪР ОПЛАКВАНИЯ (РО) ---
-# ==========================================================
+# ... (Останалият код за РО остава същият надолу, както е предоставен в предишните стъпки) ...
 elif page == "📝 Регистър Оплаквания (РО)":
     st.title("📝 Управление на Сигнали (РО) - Фаза 2")
     
@@ -785,9 +795,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
                     except Exception as e:
                         st.error(f"Грешка при запис: {e}")
 
-# ==========================================================
-# --- СТРАНИЦА 3: АНАЛИЗИ И СПРАВКИ (РО) ---
-# ==========================================================
 elif page == "📈 Анализи и Справки (РО)":
     st.title("📈 Анализи и Справки (РО)")
     st.markdown("---")
