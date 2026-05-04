@@ -385,7 +385,8 @@ def show_company_tickets(company_code, df_complaints):
 # ==========================================================
 st.sidebar.title("🏗️ SequaK Меню")
 
-available_pages = ["📊 Оперативен Дашборд (ПП)", "📈 Анализи и Справки (РО)"]
+# ИМЕ НА ДАШБОРДА Е ПРОМЕНЕНО
+available_pages = ["📊 ПП - Дашборд", "📈 Анализи и Справки (РО)"]
 if st.session_state.user_role == "Администратор":
     available_pages.insert(1, "📝 Регистър Оплаквания (РО)")
 
@@ -400,12 +401,12 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 4.2")
+st.sidebar.caption("Входът е защитен. Версия 4.3")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
 # ==========================================================
-if page == "📊 Оперативен Дашборд (ПП)":
+if page == "📊 ПП - Дашборд":
     try:
         response_pp = supabase.table("missed_profits").select("*, companies(code)").limit(100000).execute()
         df_pp = pd.DataFrame(response_pp.data)
@@ -421,7 +422,8 @@ if page == "📊 Оперативен Дашборд (ПП)":
             df_pp['clean_machine'] = 'UNKNOWN'
             df_pp['event_date'] = pd.to_datetime(datetime.date.today())
 
-        st.title("📊 Оперативен Дашборд (ПП)")
+        # ИМЕ НА ДАШБОРДА Е ПРОМЕНЕНО
+        st.title("📊 ПП (Пропуснати ползи) - Дашборд")
         
         if df_pp.empty:
             st.info("В момента няма заредени данни за пропуснати ползи.")
@@ -442,15 +444,25 @@ if page == "📊 Оперативен Дашборд (ПП)":
 
             st.markdown("---")
             
-            total_eur = df_filtered['total_value_eur'].sum() if not df_filtered.empty else 0
-            total_count = len(df_filtered)
-            avg_eur = total_eur / total_count if total_count > 0 else 0
+            # --- НОВИ KPI МЕТРИКИ (Само за "Отказва се" и "Нямаме наличност") ---
+            if 'resolution_status' in df_filtered.columns:
+                df_filtered['safe_status_kpi'] = df_filtered['resolution_status'].astype(str).str.lower().str.strip()
+                valid_statuses = ['отказва се', 'нямаме наличност']
+                
+                # Филтрираме само тези два статуса за изчисленията на KPI
+                df_kpi = df_filtered[df_filtered['safe_status_kpi'].isin(valid_statuses)]
+                
+                total_eur = df_kpi['total_value_eur'].sum() if not df_kpi.empty else 0
+                total_count = len(df_kpi)
+                avg_eur = total_eur / total_count if total_count > 0 else 0
+            else:
+                total_eur, total_count, avg_eur = 0, 0, 0
 
             st.markdown('<div class="analytic-card">', unsafe_allow_html=True)
             kpi1, kpi2, kpi3 = st.columns(3)
             kpi1.metric("Общо пропуски (EUR)", f"€ {total_eur:,.2f}")
-            kpi2.metric("Брой изпуснати сделки", f"{total_count} бр.")
-            kpi3.metric("Средна стойност на пропуск", f"€ {avg_eur:,.2f}")
+            kpi2.metric("Общо необслужени заради неналичност и отказ", f"{total_count} бр.")
+            kpi3.metric("Средно на брой необслужено, заради неналичност и отказ", f"€ {avg_eur:,.2f}")
             st.markdown('</div>', unsafe_allow_html=True)
 
             col_ch1, col_ch2 = st.columns([1.5, 1])
@@ -483,6 +495,9 @@ if page == "📊 Оперативен Дашборд (ПП)":
                             'Не предлагаме (Бр.)'
                         ]
                         
+                        # --- СОРТИРАНЕ ПО "Няма наличност (€)" ПРЕДИ ДОБАВЯНЕ НА ТОТАЛИТЕ ---
+                        status_summary = status_summary.sort_values(by='Няма наличност (€)', ascending=False)
+                        
                         status_summary['Общо (Бр.)'] = status_summary['Отказва се (Бр.)'] + status_summary['Няма наличност (Бр.)'] + status_summary['Не предлагаме (Бр.)']
                         status_summary['Общо (€)'] = status_summary['Отказва се (€)'] + status_summary['Няма наличност (€)']
                         
@@ -497,7 +512,8 @@ if page == "📊 Оперативен Дашборд (ПП)":
                             'Общо (€)': [status_summary['Общо (€)'].sum()]
                         })
                         
-                        status_summary = pd.concat([status_summary, total_row], ignore_index=True)
+                        # ОБЩО отива най-отгоре
+                        status_summary = pd.concat([total_row, status_summary], ignore_index=True)
 
                         styled_status = status_summary.style.format({
                             'Отказва се (€)': '€ {:,.2f}',
@@ -522,9 +538,9 @@ if page == "📊 Оперативен Дашборд (ПП)":
                         st.write("Няма данни за избрания период.")
 
             with col_ch2:
-                st.subheader("🏆 Топ 10 Машини")
+                # --- ИМЕТО НА СЕКЦИЯТА ВЕЧЕ Е ТОП 15 ---
+                st.subheader("🏆 Топ 15 Машини")
                 
-                # --- НОВИЯТ СРЕЗ ПО СТАТУС ---
                 status_filter = st.radio(
                     "Срез по статус на обаждането:",
                     ["Всички", "Информира се", "Отказва се", "Нямаме наличност", "Не предлагаме"],
@@ -532,37 +548,60 @@ if page == "📊 Оперативен Дашборд (ПП)":
                 )
 
                 if status_filter != "Всички":
-                    # Филтрираме данните само за избрания статус (независимо от главни/малки букви)
-                    df_top10_base = df_filtered[df_filtered['resolution_status'].astype(str).str.strip().str.lower() == status_filter.lower()]
+                    df_top15_base = df_filtered[df_filtered['resolution_status'].astype(str).str.strip().str.lower() == status_filter.lower()]
                 else:
-                    df_top10_base = df_filtered.copy()
+                    df_top15_base = df_filtered.copy()
 
                 tab_all, tab_ren, tab_cim, tab_mas, tab_cmx = st.tabs(["Всички", "REN", "CIM", "MAS", "CMX"])
                 
-                def show_top_10(df_to_show, current_status):
+                def show_top_15(df_to_show, current_status):
                     if df_to_show.empty or 'clean_machine' not in df_to_show.columns:
                         st.write("Няма данни за този срез.")
                         return
 
                     if current_status == "Не предлагаме":
                         # За "Не предлагаме" агрегираме по БРОЙ
-                        top_10 = df_to_show.groupby('clean_machine').size().reset_index(name='Брой')
-                        top_10 = top_10.nlargest(10, 'Брой')
-                        top_10.columns = ['Машина', 'Търсения (бр.)']
-                        styled_df = top_10.style.format({'Търсения (бр.)': '{} бр.'}).set_properties(**{'color': '#FFD700'})
+                        top_15 = df_to_show.groupby('clean_machine').size().reset_index(name='Брой')
+                        # --- ВЕЧЕ Е 15 ---
+                        top_15 = top_15.nlargest(15, 'Брой')
+                        top_15.columns = ['Машина', 'Търсения (бр.)']
+                        styled_df = top_15.style.format({'Търсения (бр.)': '{} бр.'}).set_properties(**{'color': '#FFD700'})
                     else:
                         # За всички останали агрегираме по СУМА
-                        top_10 = df_to_show.groupby('clean_machine')['total_value_eur'].sum().nlargest(10).reset_index()
-                        top_10.columns = ['Машина', 'Изпусната сума (€)']
-                        styled_df = top_10.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFD700'})
+                        top_15 = df_to_show.groupby('clean_machine')['total_value_eur'].sum().nlargest(15).reset_index()
+                        top_15.columns = ['Машина', 'Изпусната сума (€)']
+                        styled_df = top_15.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFD700'})
 
                     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
-                with tab_all: show_top_10(df_top10_base, status_filter)
-                with tab_ren: show_top_10(df_top10_base[df_top10_base['company_code'] == 'REN'], status_filter)
-                with tab_cim: show_top_10(df_top10_base[df_top10_base['company_code'].isin(['CIM', 'RCD'])], status_filter)
-                with tab_mas: show_top_10(df_top10_base[df_top10_base['company_code'] == 'MAS'], status_filter)
-                with tab_cmx: show_top_10(df_top10_base[df_top10_base['company_code'] == 'CMX'], status_filter)
+                with tab_all: show_top_15(df_top15_base, status_filter)
+                with tab_ren: show_top_15(df_top15_base[df_top15_base['company_code'] == 'REN'], status_filter)
+                with tab_cim: show_top_15(df_top15_base[df_top15_base['company_code'].isin(['CIM', 'RCD'])], status_filter)
+                with tab_mas: show_top_15(df_top15_base[df_top15_base['company_code'] == 'MAS'], status_filter)
+                with tab_cmx: show_top_15(df_top15_base[df_top15_base['company_code'] == 'CMX'], status_filter)
+            
+            # --- БУТОН ЗА ЕКСПОРТ (ВИДИМ ЗА ВСИЧКИ РОЛИ) ---
+            st.markdown("---")
+            with st.expander("📥 Изтегляне на филтрираните данни (Excel)"):
+                st.write(f"Готови за изтегляне: **{len(df_filtered)}** записа (отговарящи на избрания по-горе период).")
+                
+                buffer_pp = io.BytesIO()
+                export_df_pp = df_filtered.copy()
+                
+                # Почистване преди експорт (премахваме технически колони)
+                if 'companies' in export_df_pp.columns:
+                    export_df_pp = export_df_pp.drop(columns=['companies'])
+                
+                with pd.ExcelWriter(buffer_pp, engine='openpyxl') as writer:
+                    export_df_pp.to_excel(writer, index=False, sheet_name='Пропуснати_Ползи')
+                
+                st.download_button(
+                    label="💾 Изтегли като .xlsx",
+                    data=buffer_pp.getvalue(),
+                    file_name=f"SequaK_PP_{start_date}_to_{end_date}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary"
+                )
 
     except Exception as e:
         st.error(f"Възникна грешка: {e}")
@@ -606,7 +645,7 @@ if page == "📊 Оперативен Дашборд (ПП)":
                             df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date', 'company_id'])
                             df_to_insert = df_to_insert.replace({float('nan'): None, np.nan: None})
                             
-                            # --- ПЕРФЕКТЕН ФИЛТЪР БЕЗ ЧАСОВИ ЗОНИ ---
+                            # --- ПЕРФЕКТЕН ФИЛТЪР ---
                             existing_fingerprints = set()
                             if not df_pp.empty and 'event_date' in df_pp.columns:
                                 db_cmp = df_pp['company_code'].astype(str).str.strip().str.upper()
@@ -623,7 +662,6 @@ if page == "📊 Оперативен Дашборд (ПП)":
                             new_val = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0).round(2).apply(lambda x: f"{x:.2f}")
 
                             df_to_insert['fingerprint'] = new_cmp + "|" + new_tag + "|" + new_date + "|" + new_val
-                            # ----------------------------------------
                             
                             df_to_insert = df_to_insert.drop_duplicates(subset=['fingerprint'])
                             df_final = df_to_insert[~df_to_insert['fingerprint'].isin(existing_fingerprints)].copy()
