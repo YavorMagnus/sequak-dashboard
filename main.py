@@ -16,7 +16,8 @@ st.markdown("""
     <style>
     .stApp { background-color: #111111; color: #FFFFFF; }
     h1, h2, h3, h4 { color: #FFD700; } 
-    .stMetric label { color: #FFD700 !important; font-size: 1.1rem !important; }
+    /* Увеличен шрифт и удебеляване за етикетите на KPI метриките */
+    .stMetric label { color: #FFD700 !important; font-size: 1.3rem !important; font-weight: 600 !important; line-height: 1.2 !important; padding-bottom: 5px; }
     div[data-testid="metric-container"] {
         background-color: #222222; border: 1px solid #FFD700; padding: 15px; border-radius: 8px; box-shadow: 0 4px 6px rgba(255, 215, 0, 0.1);
     }
@@ -385,7 +386,6 @@ def show_company_tickets(company_code, df_complaints):
 # ==========================================================
 st.sidebar.title("🏗️ SequaK Меню")
 
-# ИМЕ НА ДАШБОРДА Е ПРОМЕНЕНО
 available_pages = ["📊 ПП - Дашборд", "📈 Анализи и Справки (РО)"]
 if st.session_state.user_role == "Администратор":
     available_pages.insert(1, "📝 Регистър Оплаквания (РО)")
@@ -401,7 +401,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 4.3")
+st.sidebar.caption("Входът е защитен. Версия 4.4 (Final)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -422,7 +422,6 @@ if page == "📊 ПП - Дашборд":
             df_pp['clean_machine'] = 'UNKNOWN'
             df_pp['event_date'] = pd.to_datetime(datetime.date.today())
 
-        # ИМЕ НА ДАШБОРДА Е ПРОМЕНЕНО
         st.title("📊 ПП (Пропуснати ползи) - Дашборд")
         
         if df_pp.empty:
@@ -444,12 +443,10 @@ if page == "📊 ПП - Дашборд":
 
             st.markdown("---")
             
-            # --- НОВИ KPI МЕТРИКИ (Само за "Отказва се" и "Нямаме наличност") ---
             if 'resolution_status' in df_filtered.columns:
                 df_filtered['safe_status_kpi'] = df_filtered['resolution_status'].astype(str).str.lower().str.strip()
                 valid_statuses = ['отказва се', 'нямаме наличност']
                 
-                # Филтрираме само тези два статуса за изчисленията на KPI
                 df_kpi = df_filtered[df_filtered['safe_status_kpi'].isin(valid_statuses)]
                 
                 total_eur = df_kpi['total_value_eur'].sum() if not df_kpi.empty else 0
@@ -460,9 +457,10 @@ if page == "📊 ПП - Дашборд":
 
             st.markdown('<div class="analytic-card">', unsafe_allow_html=True)
             kpi1, kpi2, kpi3 = st.columns(3)
-            kpi1.metric("Общо пропуски (EUR)", f"€ {total_eur:,.2f}")
-            kpi2.metric("Общо необслужени заради неналичност и отказ", f"{total_count} бр.")
-            kpi3.metric("Средно на брой необслужено, заради неналичност и отказ", f"€ {avg_eur:,.2f}")
+            # Обновени текстове с увеличени шрифтове през CSS-а
+            kpi1.metric("Пропуснати ползи (неналичност/отказ от клиент)", f"€ {total_eur:,.2f}")
+            kpi2.metric("Общо броя необслужени (неналичност/отказ от клиент)", f"{total_count} бр.")
+            kpi3.metric("Средно на брой необслужено", f"€ {avg_eur:,.2f}")
             st.markdown('</div>', unsafe_allow_html=True)
 
             col_ch1, col_ch2 = st.columns([1.5, 1])
@@ -495,7 +493,6 @@ if page == "📊 ПП - Дашборд":
                             'Не предлагаме (Бр.)'
                         ]
                         
-                        # --- СОРТИРАНЕ ПО "Няма наличност (€)" ПРЕДИ ДОБАВЯНЕ НА ТОТАЛИТЕ ---
                         status_summary = status_summary.sort_values(by='Няма наличност (€)', ascending=False)
                         
                         status_summary['Общо (Бр.)'] = status_summary['Отказва се (Бр.)'] + status_summary['Няма наличност (Бр.)'] + status_summary['Не предлагаме (Бр.)']
@@ -512,7 +509,6 @@ if page == "📊 ПП - Дашборд":
                             'Общо (€)': [status_summary['Общо (€)'].sum()]
                         })
                         
-                        # ОБЩО отива най-отгоре
                         status_summary = pd.concat([total_row, status_summary], ignore_index=True)
 
                         styled_status = status_summary.style.format({
@@ -538,7 +534,6 @@ if page == "📊 ПП - Дашборд":
                         st.write("Няма данни за избрания период.")
 
             with col_ch2:
-                # --- ИМЕТО НА СЕКЦИЯТА ВЕЧЕ Е ТОП 15 ---
                 st.subheader("🏆 Топ 15 Машини")
                 
                 status_filter = st.radio(
@@ -560,14 +555,11 @@ if page == "📊 ПП - Дашборд":
                         return
 
                     if current_status == "Не предлагаме":
-                        # За "Не предлагаме" агрегираме по БРОЙ
                         top_15 = df_to_show.groupby('clean_machine').size().reset_index(name='Брой')
-                        # --- ВЕЧЕ Е 15 ---
                         top_15 = top_15.nlargest(15, 'Брой')
                         top_15.columns = ['Машина', 'Търсения (бр.)']
                         styled_df = top_15.style.format({'Търсения (бр.)': '{} бр.'}).set_properties(**{'color': '#FFD700'})
                     else:
-                        # За всички останали агрегираме по СУМА
                         top_15 = df_to_show.groupby('clean_machine')['total_value_eur'].sum().nlargest(15).reset_index()
                         top_15.columns = ['Машина', 'Изпусната сума (€)']
                         styled_df = top_15.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFD700'})
@@ -580,7 +572,6 @@ if page == "📊 ПП - Дашборд":
                 with tab_mas: show_top_15(df_top15_base[df_top15_base['company_code'] == 'MAS'], status_filter)
                 with tab_cmx: show_top_15(df_top15_base[df_top15_base['company_code'] == 'CMX'], status_filter)
             
-            # --- БУТОН ЗА ЕКСПОРТ (ВИДИМ ЗА ВСИЧКИ РОЛИ) ---
             st.markdown("---")
             with st.expander("📥 Изтегляне на филтрираните данни (Excel)"):
                 st.write(f"Готови за изтегляне: **{len(df_filtered)}** записа (отговарящи на избрания по-горе период).")
@@ -588,7 +579,6 @@ if page == "📊 ПП - Дашборд":
                 buffer_pp = io.BytesIO()
                 export_df_pp = df_filtered.copy()
                 
-                # Почистване преди експорт (премахваме технически колони)
                 if 'companies' in export_df_pp.columns:
                     export_df_pp = export_df_pp.drop(columns=['companies'])
                 
