@@ -397,7 +397,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 4.0 (Final)")
+st.sidebar.caption("Входът е защитен. Версия 4.1 (Final)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -410,8 +410,6 @@ if page == "📊 Оперативен Дашборд (ПП)":
         if not df_pp.empty:
             df_pp['company_code'] = df_pp['companies'].apply(lambda x: x.get('code', 'UNKNOWN').upper() if isinstance(x, dict) else 'UNKNOWN')
             df_pp['clean_machine'] = df_pp['item_tag'].apply(lambda x: str(x).split('|')[-1].strip() if '|' in str(x) else str(x))
-            
-            # ФИКС ЗА ЧАСОВИТЕ ЗОНИ (премахваме UTC отпечатъка)
             df_pp['event_date'] = pd.to_datetime(df_pp['event_date'], errors='coerce')
             if df_pp['event_date'].dt.tz is not None:
                 df_pp['event_date'] = df_pp['event_date'].dt.tz_localize(None)
@@ -580,18 +578,20 @@ if page == "📊 Оперативен Дашборд (ПП)":
                             df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date', 'company_id'])
                             df_to_insert = df_to_insert.replace({float('nan'): None, np.nan: None})
                             
-                            # --- ПЕРФЕКТЕН ФИЛТЪР БЕЗ ЧАСОВИ ЗОНИ ---
+                            # --- ПЕРФЕКТЕН ФИЛТЪР (БЕЗ ID И ЧАСОВИ ЗОНИ) ---
                             existing_fingerprints = set()
                             if not df_pp.empty and 'event_date' in df_pp.columns:
-                                db_cmp = df_pp['company_id'].astype(str).str.strip()
+                                # Използваме ТЕКСТОВИЯ код на фирмата, а не машинното ID, за да избегнем 1.0 != 1
+                                db_cmp = df_pp['company_code'].astype(str).str.strip().str.upper()
                                 db_tag = df_pp['item_tag'].astype(str).str.strip().str.lower()
                                 db_date = pd.to_datetime(df_pp['event_date'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S')
+                                # Форматираме до точно 2 знака след запетаята за пълна сигурност
                                 db_val = pd.to_numeric(df_pp['total_value_eur'], errors='coerce').fillna(0).round(2).apply(lambda x: f"{x:.2f}")
                                 
                                 existing_sigs = db_cmp + "|" + db_tag + "|" + db_date + "|" + db_val
                                 existing_fingerprints = set(existing_sigs)
 
-                            new_cmp = df_to_insert['company_id'].astype(str).str.strip()
+                            new_cmp = df_to_insert['mapped_code'].astype(str).str.strip().str.upper()
                             new_tag = df_to_insert['item_tag'].astype(str).str.strip().str.lower()
                             new_date = pd.to_datetime(df_to_insert['event_date'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S')
                             new_val = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0).round(2).apply(lambda x: f"{x:.2f}")
