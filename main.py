@@ -104,6 +104,7 @@ def show_ticket_details(ticket):
     with col2:
         st.write(f"**Договор №:** {ticket.get('contract_number', '-')}")
         st.write(f"**Машина/и:** {ticket.get('machines', '-')}")
+        st.write(f"**Аудио запис (номер):** {ticket.get('call_number', '-')}")
     
     st.info(f"**Описание:** {ticket.get('description', '')}")
     st.markdown("---")
@@ -316,11 +317,8 @@ def show_company_tickets(company_code, df_complaints):
             strike = "s" if status == "Сгрешен/Анулиран" else "strong"
             client_display = f"👤 <{strike}>{client}</{strike}>" + (" <span style='color:#00aaff;'>🔵 [В диспут]</span>" if has_client_action and status not in TERMINAL_STATUSES else "")
             st.markdown(client_display, unsafe_allow_html=True)
-            
-            # Format datetime safely
             dt_str = pd.to_datetime(row.get('event_datetime')).strftime('%d.%m.%Y %H:%M') if pd.notna(row.get('event_datetime')) else ""
             st.caption(f"Дата: {dt_str}")
-            
         with colB:
             color = "gray" if status == "Сгрешен/Анулиран" else "red" if is_overdue else "green" if status == "Приключено" else "orange"
             st.markdown(f"Статус: <span style='color:{color}'>{status}</span>", unsafe_allow_html=True)
@@ -499,7 +497,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
                         st.session_state.active_company = comp
                         st.rerun()
 
-        # Показване на специфичния списък за избраната фирма
         if st.session_state.active_company:
             st.markdown("---")
             show_company_tickets(st.session_state.active_company, df_complaints)
@@ -507,17 +504,28 @@ elif page == "📝 Регистър Оплаквания (РО)":
         st.markdown("---")
         
         # =========================================================
-        # --- ТАБЛИЦА С ПОСЛЕДНИТЕ 20 СИГНАЛА ---
+        # --- ТЪРСАЧКА И ТАБЛИЦА ---
         # =========================================================
-        st.markdown("### 🕒 Последни 20 въведени сигнала")
+        st.markdown("### 🔍 Търсачка")
+        search_query = st.text_input("Търсене по: Име, Телефон, ЕИК, Имейл, Договор, Машина или Аудио запис", placeholder="Въведете текст и натиснете Enter...", key="global_search").strip()
         
         if not df_complaints.empty:
-            # Сортираме по ID низходящо (най-новите първи) и взимаме топ 20
-            recent_20 = df_complaints.sort_values(by="id", ascending=False).head(20)
+            if search_query:
+                # Филтрираме базата данни спрямо въведеното (case-insensitive)
+                q = search_query.lower()
+                search_cols = ['client_name', 'client_phone', 'client_email', 'client_eik', 'contract_number', 'machines', 'call_number']
+                mask = False
+                for col in search_cols:
+                    if col in df_complaints.columns:
+                        mask = mask | df_complaints[col].fillna('').astype(str).str.lower().str.contains(q)
+                
+                display_df = df_complaints[mask].sort_values(by="event_datetime", ascending=False)
+                st.markdown(f"**Намерени резултати:** {len(display_df)}")
+            else:
+                st.markdown("#### 🕒 Последни 20 въведени сигнала")
+                display_df = df_complaints.sort_values(by="id", ascending=False).head(20)
             
-            # Контейнерът с height=400 автоматично създава скролбар, ако съдържанието надвиши височината
             with st.container(height=400, border=True):
-                # Заглавен ред (Хедър на таблицата)
                 h_col1, h_col2, h_col3, h_col4, h_col5 = st.columns([1.5, 2, 1, 2, 1])
                 h_col1.markdown("**Дата и Час**")
                 h_col2.markdown("**Клиент**")
@@ -526,32 +534,30 @@ elif page == "📝 Регистър Оплаквания (РО)":
                 h_col5.markdown("**Действие**")
                 st.divider()
                 
-                for _, row in recent_20.iterrows():
-                    r_col1, r_col2, r_col3, r_col4, r_col5 = st.columns([1.5, 2, 1, 2, 1])
-                    
-                    status = row.get('current_status', 'Неопределен')
-                    
-                    # Форматиране на датата
-                    dt_str = pd.to_datetime(row.get('event_datetime')).strftime('%d.%m.%Y %H:%M') if pd.notna(row.get('event_datetime')) else ""
-                    r_col1.write(dt_str)
-                    
-                    # Задраскване, ако е анулиран
-                    client = row.get('client_name', 'Неизвестен')
-                    strike = "s" if status == "Сгрешен/Анулиран" else "span"
-                    r_col2.markdown(f"<{strike}>{client}</{strike}>", unsafe_allow_html=True)
-                    
-                    r_col3.write(row.get('Фирма', ''))
-                    
-                    # Статус с цвят
-                    color = "gray" if status == "Сгрешен/Анулиран" else "green" if status == "Приключено" else "orange"
-                    r_col4.markdown(f"<span style='color:{color}'>{status}</span>", unsafe_allow_html=True)
-                    
-                    with r_col5:
-                        # Бутонът отваря същия главен диалог за Картона
-                        if st.button("Отвори", key=f"btn_rec_{row['id']}"):
-                            show_ticket_details(row.to_dict())
-                    
-                    st.markdown("<hr style='margin: 0.2em 0; opacity: 0.2'>", unsafe_allow_html=True)
+                if display_df.empty:
+                    st.write("Няма намерени записи, отговарящи на критериите.")
+                else:
+                    for _, row in display_df.iterrows():
+                        r_col1, r_col2, r_col3, r_col4, r_col5 = st.columns([1.5, 2, 1, 2, 1])
+                        
+                        status = row.get('current_status', 'Неопределен')
+                        dt_str = pd.to_datetime(row.get('event_datetime')).strftime('%d.%m.%Y %H:%M') if pd.notna(row.get('event_datetime')) else ""
+                        r_col1.write(dt_str)
+                        
+                        client = row.get('client_name', 'Неизвестен')
+                        strike = "s" if status == "Сгрешен/Анулиран" else "span"
+                        r_col2.markdown(f"<{strike}>{client}</{strike}>", unsafe_allow_html=True)
+                        
+                        r_col3.write(row.get('Фирма', ''))
+                        
+                        color = "gray" if status == "Сгрешен/Анулиран" else "green" if status == "Приключено" else "orange"
+                        r_col4.markdown(f"<span style='color:{color}'>{status}</span>", unsafe_allow_html=True)
+                        
+                        with r_col5:
+                            if st.button("Отвори", key=f"btn_rec_{row['id']}"):
+                                show_ticket_details(row.to_dict())
+                        
+                        st.markdown("<hr style='margin: 0.2em 0; opacity: 0.2'>", unsafe_allow_html=True)
         else:
             st.info("Все още няма регистрирани сигнали в базата данни.")
             
