@@ -31,6 +31,9 @@ st.markdown("""
     
     /* Стилизиране на таблиците в дашборда */
     [data-testid="stDataFrame"] { background-color: #1e1e1e; border-radius: 8px; }
+    
+    /* Стилизиране на Radio бутоните да приличат на табове */
+    div[role="radiogroup"] { flex-wrap: wrap; gap: 10px; margin-bottom: 15px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -397,7 +400,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 4.1 (Final)")
+st.sidebar.caption("Входът е защитен. Версия 4.2")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -520,21 +523,46 @@ if page == "📊 Оперативен Дашборд (ПП)":
 
             with col_ch2:
                 st.subheader("🏆 Топ 10 Машини")
+                
+                # --- НОВИЯТ СРЕЗ ПО СТАТУС ---
+                status_filter = st.radio(
+                    "Срез по статус на обаждането:",
+                    ["Всички", "Информира се", "Отказва се", "Нямаме наличност", "Не предлагаме"],
+                    horizontal=True
+                )
+
+                if status_filter != "Всички":
+                    # Филтрираме данните само за избрания статус (независимо от главни/малки букви)
+                    df_top10_base = df_filtered[df_filtered['resolution_status'].astype(str).str.strip().str.lower() == status_filter.lower()]
+                else:
+                    df_top10_base = df_filtered.copy()
+
                 tab_all, tab_ren, tab_cim, tab_mas, tab_cmx = st.tabs(["Всички", "REN", "CIM", "MAS", "CMX"])
-                def show_top_10(df_to_show):
+                
+                def show_top_10(df_to_show, current_status):
                     if df_to_show.empty or 'clean_machine' not in df_to_show.columns:
-                        st.write("Няма данни.")
+                        st.write("Няма данни за този срез.")
                         return
-                    top_10 = df_to_show.groupby('clean_machine')['total_value_eur'].sum().nlargest(10).reset_index()
-                    top_10.columns = ['Машина', 'Изпусната сума (€)']
-                    styled_df = top_10.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFD700'})
+
+                    if current_status == "Не предлагаме":
+                        # За "Не предлагаме" агрегираме по БРОЙ
+                        top_10 = df_to_show.groupby('clean_machine').size().reset_index(name='Брой')
+                        top_10 = top_10.nlargest(10, 'Брой')
+                        top_10.columns = ['Машина', 'Търсения (бр.)']
+                        styled_df = top_10.style.format({'Търсения (бр.)': '{} бр.'}).set_properties(**{'color': '#FFD700'})
+                    else:
+                        # За всички останали агрегираме по СУМА
+                        top_10 = df_to_show.groupby('clean_machine')['total_value_eur'].sum().nlargest(10).reset_index()
+                        top_10.columns = ['Машина', 'Изпусната сума (€)']
+                        styled_df = top_10.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFD700'})
+
                     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
-                with tab_all: show_top_10(df_filtered)
-                with tab_ren: show_top_10(df_filtered[df_filtered['company_code'] == 'REN'])
-                with tab_cim: show_top_10(df_filtered[df_filtered['company_code'].isin(['CIM', 'RCD'])])
-                with tab_mas: show_top_10(df_filtered[df_filtered['company_code'] == 'MAS'])
-                with tab_cmx: show_top_10(df_filtered[df_filtered['company_code'] == 'CMX'])
+                with tab_all: show_top_10(df_top10_base, status_filter)
+                with tab_ren: show_top_10(df_top10_base[df_top10_base['company_code'] == 'REN'], status_filter)
+                with tab_cim: show_top_10(df_top10_base[df_top10_base['company_code'].isin(['CIM', 'RCD'])], status_filter)
+                with tab_mas: show_top_10(df_top10_base[df_top10_base['company_code'] == 'MAS'], status_filter)
+                with tab_cmx: show_top_10(df_top10_base[df_top10_base['company_code'] == 'CMX'], status_filter)
 
     except Exception as e:
         st.error(f"Възникна грешка: {e}")
@@ -578,14 +606,12 @@ if page == "📊 Оперативен Дашборд (ПП)":
                             df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date', 'company_id'])
                             df_to_insert = df_to_insert.replace({float('nan'): None, np.nan: None})
                             
-                            # --- ПЕРФЕКТЕН ФИЛТЪР (БЕЗ ID И ЧАСОВИ ЗОНИ) ---
+                            # --- ПЕРФЕКТЕН ФИЛТЪР БЕЗ ЧАСОВИ ЗОНИ ---
                             existing_fingerprints = set()
                             if not df_pp.empty and 'event_date' in df_pp.columns:
-                                # Използваме ТЕКСТОВИЯ код на фирмата, а не машинното ID, за да избегнем 1.0 != 1
                                 db_cmp = df_pp['company_code'].astype(str).str.strip().str.upper()
                                 db_tag = df_pp['item_tag'].astype(str).str.strip().str.lower()
                                 db_date = pd.to_datetime(df_pp['event_date'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S')
-                                # Форматираме до точно 2 знака след запетаята за пълна сигурност
                                 db_val = pd.to_numeric(df_pp['total_value_eur'], errors='coerce').fillna(0).round(2).apply(lambda x: f"{x:.2f}")
                                 
                                 existing_sigs = db_cmp + "|" + db_tag + "|" + db_date + "|" + db_val
