@@ -1,4 +1,7 @@
 streamlit
 supabase
 pandas
+numpy
 openpyxl
+python-dateutil
+plotly
