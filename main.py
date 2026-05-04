@@ -397,14 +397,15 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 3.6")
+st.sidebar.caption("Входът е защитен. Версия 3.7")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
 # ==========================================================
 if page == "📊 Оперативен Дашборд (ПП)":
     try:
-        response_pp = supabase.table("missed_profits").select("*, companies(code)").limit(10000).execute()
+        # ЗАЯВКА С ВДИГНАТ ЛИМИТ ЗА ВЕЧЕ ПОПРАВЕНИЯ СЪРВЪР
+        response_pp = supabase.table("missed_profits").select("*, companies(code)").limit(100000).execute()
         df_pp = pd.DataFrame(response_pp.data)
         
         if not df_pp.empty:
@@ -421,7 +422,6 @@ if page == "📊 Оперативен Дашборд (ПП)":
         if df_pp.empty:
             st.info("В момента няма заредени данни за пропуснати ползи.")
         else:
-            # --- ФИЛТРИ ---
             min_date = df_pp['event_date'].min().date() if pd.notna(df_pp['event_date'].min()) else datetime.date.today()
             max_date = df_pp['event_date'].max().date() if pd.notna(df_pp['event_date'].max()) else datetime.date.today()
             
@@ -438,7 +438,6 @@ if page == "📊 Оперативен Дашборд (ПП)":
 
             st.markdown("---")
             
-            # --- KPI МЕТРИКИ ---
             total_eur = df_filtered['total_value_eur'].sum() if not df_filtered.empty else 0
             total_count = len(df_filtered)
             avg_eur = total_eur / total_count if total_count > 0 else 0
@@ -450,12 +449,10 @@ if page == "📊 Оперативен Дашборд (ПП)":
             kpi3.metric("Средна стойност на пропуск", f"€ {avg_eur:,.2f}")
             st.markdown('</div>', unsafe_allow_html=True)
 
-            # --- ГРАФИКИ И ТАБЛИЦИ ---
             col_ch1, col_ch2 = st.columns([1.5, 1])
             
             with col_ch1:
                 st.subheader("📑 Анализ по Статус / Фирми")
-                
                 tab_table, tab_chart = st.tabs(["📊 Детайли по Статус", "📈 Обща Графика"])
                 
                 with tab_table:
@@ -541,7 +538,6 @@ if page == "📊 Оперативен Дашборд (ПП)":
     except Exception as e:
         st.error(f"Възникна грешка: {e}")
 
-    # ОГРАНИЧЕНИЕ ЗА ВНОС: Само Администратор може да вижда този панел
     if st.session_state.user_role == "Администратор":
         st.markdown("---")
         st.header("📥 Внос на данни (Пропуснати ползи)")
@@ -562,6 +558,7 @@ if page == "📊 Оперативен Дашборд (ПП)":
                                 'Дата': 'event_date', 'Тагове': 'item_tag',
                                 'Обща стойност': 'total_value_eur', 'Резултат': 'resolution_status'
                             })
+                            
                             def get_smart_transaction_type(tag):
                                 tag_str = str(tag)
                                 if 'Наем' in tag_str: return 'Наем'
@@ -569,21 +566,25 @@ if page == "📊 Оперативен Дашборд (ПП)":
                                 return 'Неопределен'
                             df_to_insert['transaction_type'] = df_to_insert['item_tag'].apply(get_smart_transaction_type)
                             df_to_insert['event_date'] = pd.to_datetime(df_to_insert['event_date'], dayfirst=True).dt.strftime('%Y-%m-%d %H:%M:%S')
+                            
+                            # БРОНИРАНО ПРЕОБРАЗУВАНЕ НА ЧИСЛАТА (Решава проблема със запетаите!)
+                            if df_to_insert['total_value_eur'].dtype == object:
+                                df_to_insert['total_value_eur'] = df_to_insert['total_value_eur'].astype(str).str.replace(r'\s+', '', regex=True).str.replace(',', '.')
                             df_to_insert['total_value_eur'] = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0)
+                            
                             df_to_insert['resolution_status'] = df_to_insert['resolution_status'].fillna('Неопределен')
                             df_to_insert['mapped_code'] = df_to_insert['Фирма'].apply(standardize_company_code)
                             df_to_insert['company_id'] = df_to_insert['mapped_code'].map(COMPANY_MAP)
                             df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date', 'company_id'])
                             df_to_insert = df_to_insert.replace({float('nan'): None, np.nan: None})
                             
-                            # --- НОВ БРОНИРАН ФИЛТЪР (СЪС СЕКУНДИ) ---
+                            # --- ФИЛТЪР ЗА ДУБЛИКАТИ ВЪРНАТ КЪМ СЕКУНДИТЕ ---
                             existing_fingerprints = set()
                             if not df_pp.empty and 'event_date' in df_pp.columns:
                                 db_cmp = df_pp['company_id'].astype(str).str.strip()
                                 db_tag = df_pp['item_tag'].astype(str).str.strip().str.lower()
                                 db_date = pd.to_datetime(df_pp['event_date'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S')
                                 db_val = pd.to_numeric(df_pp['total_value_eur'], errors='coerce').fillna(0).round(2).astype(str)
-                                
                                 existing_sigs = db_cmp + "|" + db_tag + "|" + db_date + "|" + db_val
                                 existing_fingerprints = set(existing_sigs)
 
@@ -593,9 +594,8 @@ if page == "📊 Оперативен Дашборд (ПП)":
                             new_val = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0).round(2).astype(str)
 
                             df_to_insert['fingerprint'] = new_cmp + "|" + new_tag + "|" + new_date + "|" + new_val
-                            # ----------------------------------------
                             
-                            df_to_insert = df_to_insert.drop_duplicates(subset=['fingerprint'])
+                            # Изчистваме само тези, които вече са в базата данни
                             df_final = df_to_insert[~df_to_insert['fingerprint'].isin(existing_fingerprints)].copy()
                             df_final = df_final.drop(columns=['Фирма', 'mapped_code', 'fingerprint'])
                             
@@ -612,7 +612,7 @@ if page == "📊 Оперативен Дашборд (ПП)":
                 st.error(f"Възникна грешка: {e}")
 
 # ==========================================================
-# --- СТРАНИЦА 2: РЕГИСТЪР ОПЛАКВАНИЯ (РО) ---
+# --- СТРАНИЦА 2 и 3: ОСТАВАТ СЪЩИТЕ ---
 # ==========================================================
 elif page == "📝 Регистър Оплаквания (РО)":
     st.title("📝 Управление на Сигнали (РО) - Фаза 2")
@@ -621,7 +621,7 @@ elif page == "📝 Регистър Оплаквания (РО)":
         st.session_state.active_company = None
         
     try:
-        res = supabase.table("complaints").select("*, companies(code)").limit(10000).execute()
+        res = supabase.table("complaints").select("*, companies(code)").limit(100000).execute()
         df_complaints = pd.DataFrame(res.data)
         if not df_complaints.empty:
             df_complaints['Фирма'] = df_complaints['companies'].apply(lambda x: x.get('code', '') if isinstance(x, dict) else '')
@@ -788,18 +788,15 @@ elif page == "📝 Регистър Оплаквания (РО)":
                     except Exception as e:
                         st.error(f"Грешка при запис: {e}")
 
-# ==========================================================
-# --- СТРАНИЦА 3: АНАЛИЗИ И СПРАВКИ (РО) ---
-# ==========================================================
 elif page == "📈 Анализи и Справки (РО)":
     st.title("📈 Анализи и Справки (РО)")
     st.markdown("---")
     
     try:
-        res_comp = supabase.table("complaints").select("*, companies(code)").limit(10000).execute()
+        res_comp = supabase.table("complaints").select("*, companies(code)").limit(100000).execute()
         df_comp = pd.DataFrame(res_comp.data)
         
-        res_hist = supabase.table("complaint_history").select("*").limit(50000).execute()
+        res_hist = supabase.table("complaint_history").select("*").limit(100000).execute()
         df_hist = pd.DataFrame(res_hist.data)
         
         if not df_comp.empty:
