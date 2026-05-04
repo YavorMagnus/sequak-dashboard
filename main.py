@@ -397,14 +397,15 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 3.4")
+st.sidebar.caption("Входът е защитен. Версия 3.5")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
 # ==========================================================
 if page == "📊 Оперативен Дашборд (ПП)":
     try:
-        response_pp = supabase.table("missed_profits").select("*, companies(code)").execute()
+        # ДОБАВЕН ЛИМИТ ОТ 10 000 РЕДА
+        response_pp = supabase.table("missed_profits").select("*, companies(code)").limit(10000).execute()
         df_pp = pd.DataFrame(response_pp.data)
         
         if not df_pp.empty:
@@ -482,11 +483,9 @@ if page == "📊 Оперативен Дашборд (ПП)":
                             'Не предлагаме (Бр.)'
                         ]
                         
-                        # Тотали най-вдясно
                         status_summary['Общо (Бр.)'] = status_summary['Отказва се (Бр.)'] + status_summary['Няма наличност (Бр.)'] + status_summary['Не предлагаме (Бр.)']
                         status_summary['Общо (€)'] = status_summary['Отказва се (€)'] + status_summary['Няма наличност (€)']
                         
-                        # Тотали най-долу
                         total_row = pd.DataFrame({
                             'Фирма': ['ОБЩО'],
                             'Отказва се (Бр.)': [status_summary['Отказва се (Бр.)'].sum()],
@@ -581,27 +580,20 @@ if page == "📊 Оперативен Дашборд (ПП)":
                             # --- НОВ БРОНИРАН ФИЛТЪР ЗА ДУБЛИКАТИ ---
                             existing_fingerprints = set()
                             if not df_pp.empty and 'event_date' in df_pp.columns:
-                                temp_existing_dates = pd.to_datetime(df_pp['event_date'], errors='coerce')
-                                if temp_existing_dates.dt.tz is not None:
-                                    temp_existing_dates = temp_existing_dates.dt.tz_localize(None)
-                                # Игнорираме секундите (%H:%M вместо %H:%M:%S)
-                                existing_dates = temp_existing_dates.dt.strftime('%Y-%m-%d %H:%M')
-                                # Уеднаквяваме малки/главни букви и махаме празни места
-                                existing_tags = df_pp['item_tag'].astype(str).str.strip().str.lower()
-                                # Твърдо закръгляне до 2 знака след запетаята
-                                existing_vals = pd.to_numeric(df_pp['total_value_eur'], errors='coerce').fillna(0).round(2).apply(lambda x: f"{x:.2f}")
+                                db_cmp = df_pp['company_id'].astype(str).str.strip()
+                                db_tag = df_pp['item_tag'].astype(str).str.strip().str.lower()
+                                db_date = pd.to_datetime(df_pp['event_date'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
+                                db_val = pd.to_numeric(df_pp['total_value_eur'], errors='coerce').fillna(0).round(2).astype(str)
                                 
-                                existing_sigs = df_pp['company_id'].astype(str) + "|" + existing_tags + "|" + existing_dates + "|" + existing_vals
+                                existing_sigs = db_cmp + "|" + db_tag + "|" + db_date + "|" + db_val
                                 existing_fingerprints = set(existing_sigs)
 
-                            temp_new_dates = pd.to_datetime(df_to_insert['event_date'], errors='coerce')
-                            if temp_new_dates.dt.tz is not None:
-                                temp_new_dates = temp_new_dates.dt.tz_localize(None)
-                            new_dates = temp_new_dates.dt.strftime('%Y-%m-%d %H:%M')
-                            new_tags = df_to_insert['item_tag'].astype(str).str.strip().str.lower()
-                            new_vals = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0).round(2).apply(lambda x: f"{x:.2f}")
-                            
-                            df_to_insert['fingerprint'] = df_to_insert['company_id'].astype(str) + "|" + new_tags + "|" + new_dates + "|" + new_vals
+                            new_cmp = df_to_insert['company_id'].astype(str).str.strip()
+                            new_tag = df_to_insert['item_tag'].astype(str).str.strip().str.lower()
+                            new_date = pd.to_datetime(df_to_insert['event_date'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
+                            new_val = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0).round(2).astype(str)
+
+                            df_to_insert['fingerprint'] = new_cmp + "|" + new_tag + "|" + new_date + "|" + new_val
                             # ----------------------------------------
                             
                             df_to_insert = df_to_insert.drop_duplicates(subset=['fingerprint'])
@@ -620,7 +612,9 @@ if page == "📊 Оперативен Дашборд (ПП)":
             except Exception as e:
                 st.error(f"Възникна грешка: {e}")
 
-# ... (Останалият код за РО остава същият надолу, както е предоставен в предишните стъпки) ...
+# ==========================================================
+# --- СТРАНИЦА 2: РЕГИСТЪР ОПЛАКВАНИЯ (РО) ---
+# ==========================================================
 elif page == "📝 Регистър Оплаквания (РО)":
     st.title("📝 Управление на Сигнали (РО) - Фаза 2")
     
@@ -628,7 +622,8 @@ elif page == "📝 Регистър Оплаквания (РО)":
         st.session_state.active_company = None
         
     try:
-        res = supabase.table("complaints").select("*, companies(code)").execute()
+        # ДОБАВЕН ЛИМИТ ОТ 10 000 РЕДА
+        res = supabase.table("complaints").select("*, companies(code)").limit(10000).execute()
         df_complaints = pd.DataFrame(res.data)
         if not df_complaints.empty:
             df_complaints['Фирма'] = df_complaints['companies'].apply(lambda x: x.get('code', '') if isinstance(x, dict) else '')
@@ -795,15 +790,19 @@ elif page == "📝 Регистър Оплаквания (РО)":
                     except Exception as e:
                         st.error(f"Грешка при запис: {e}")
 
+# ==========================================================
+# --- СТРАНИЦА 3: АНАЛИЗИ И СПРАВКИ (РО) ---
+# ==========================================================
 elif page == "📈 Анализи и Справки (РО)":
     st.title("📈 Анализи и Справки (РО)")
     st.markdown("---")
     
     try:
-        res_comp = supabase.table("complaints").select("*, companies(code)").execute()
+        # ДОБАВЕНИ ЛИМИТИ
+        res_comp = supabase.table("complaints").select("*, companies(code)").limit(10000).execute()
         df_comp = pd.DataFrame(res_comp.data)
         
-        res_hist = supabase.table("complaint_history").select("*").execute()
+        res_hist = supabase.table("complaint_history").select("*").limit(50000).execute()
         df_hist = pd.DataFrame(res_hist.data)
         
         if not df_comp.empty:
