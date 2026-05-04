@@ -28,6 +28,9 @@ st.markdown("""
     .client-stream { background-color: #0d2136; padding: 20px; border-radius: 8px; border-left: 5px solid #00aaff; margin-top: 10px; box-shadow: 0 2px 4px rgba(0,170,255,0.1); }
     .client-stream h4 { color: #00aaff; margin-top: 0; }
     .analytic-card { background-color: #1e1e1e; padding: 20px; border-radius: 8px; border-top: 3px solid #FFD700; margin-bottom: 20px; }
+    
+    /* Стилизиране на таблиците в дашборда */
+    [data-testid="stDataFrame"] { background-color: #1e1e1e; border-radius: 8px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -394,7 +397,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 3.1")
+st.sidebar.caption("Входът е защитен. Версия 3.2")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -451,17 +454,62 @@ if page == "📊 Оперативен Дашборд (ПП)":
             col_ch1, col_ch2 = st.columns([1.5, 1])
             
             with col_ch1:
-                st.subheader("📈 Пропуски по Фирми (EUR)")
-                if not df_filtered.empty:
-                    company_group = df_filtered.groupby('company_code')['total_value_eur'].sum().reset_index()
-                    company_group = company_group.sort_values('total_value_eur', ascending=False)
-                    fig = px.bar(company_group, x='company_code', y='total_value_eur', 
-                                 labels={'company_code': 'Фирма', 'total_value_eur': 'Стойност (€)'},
-                                 color='company_code', color_discrete_sequence=px.colors.sequential.Plasma)
-                    fig.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font_color='white', showlegend=False)
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.write("Няма данни за избрания период.")
+                st.subheader("📑 Анализ по Статус / Фирми")
+                
+                # Създаваме табове, за да имаме и таблицата със статусите, и красивата графика
+                tab_table, tab_chart = st.tabs(["📊 Детайли по Статус", "📈 Обща Графика"])
+                
+                with tab_table:
+                    if not df_filtered.empty and 'resolution_status' in df_filtered.columns:
+                        # Подготовка на данните за статусите (всичко с малки букви за сигурно търсене)
+                        df_status = df_filtered.copy()
+                        df_status['safe_status'] = df_status['resolution_status'].astype(str).str.lower().str.strip()
+                        
+                        # Изчисляване на Брой и Сума за 'Отказва се'
+                        df_status['refused_count'] = df_status['safe_status'].str.contains('отказва се', na=False).astype(int)
+                        df_status['refused_sum'] = np.where(df_status['safe_status'].str.contains('отказва се', na=False), df_status['total_value_eur'], 0)
+                        
+                        # Изчисляване на Брой и Сума за 'Нямаме наличност'
+                        df_status['no_stock_count'] = df_status['safe_status'].str.contains('нямаме наличност', na=False).astype(int)
+                        df_status['no_stock_sum'] = np.where(df_status['safe_status'].str.contains('нямаме наличност', na=False), df_status['total_value_eur'], 0)
+                        
+                        # Изчисляване САМО на Брой за 'Не предлагаме'
+                        df_status['not_offered_count'] = df_status['safe_status'].str.contains('не предлагаме', na=False).astype(int)
+
+                        # Групиране по Фирма
+                        status_summary = df_status.groupby('company_code')[
+                            ['refused_count', 'refused_sum', 'no_stock_count', 'no_stock_sum', 'not_offered_count']
+                        ].sum().reset_index()
+                        
+                        # Преименуване на колоните за по-красив UI
+                        status_summary.columns = [
+                            'Фирма', 
+                            'Отказва се (Бр.)', 'Отказва се (€)', 
+                            'Няма наличност (Бр.)', 'Няма наличност (€)', 
+                            'Не предлагаме (Бр.)'
+                        ]
+                        
+                        # Стилизиране на валутата в таблицата
+                        styled_status = status_summary.style.format({
+                            'Отказва се (€)': '€ {:,.2f}',
+                            'Няма наличност (€)': '€ {:,.2f}'
+                        }).set_properties(**{'color': '#FFD700'})
+                        
+                        st.dataframe(styled_status, use_container_width=True, hide_index=True)
+                    else:
+                        st.write("Няма данни за статуси в избрания период.")
+                
+                with tab_chart:
+                    if not df_filtered.empty:
+                        company_group = df_filtered.groupby('company_code')['total_value_eur'].sum().reset_index()
+                        company_group = company_group.sort_values('total_value_eur', ascending=False)
+                        fig = px.bar(company_group, x='company_code', y='total_value_eur', 
+                                     labels={'company_code': 'Фирма', 'total_value_eur': 'Стойност (€)'},
+                                     color='company_code', color_discrete_sequence=px.colors.sequential.Plasma)
+                        fig.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font_color='white', showlegend=False)
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.write("Няма данни за избрания период.")
 
             with col_ch2:
                 st.subheader("🏆 Топ 10 Машини")
@@ -472,7 +520,7 @@ if page == "📊 Оперативен Дашборд (ПП)":
                         return
                     top_10 = df_to_show.groupby('clean_machine')['total_value_eur'].sum().nlargest(10).reset_index()
                     top_10.columns = ['Машина', 'Изпусната сума (€)']
-                    styled_df = top_10.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFD700'})
+                    styled_df = top_10.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFFFFF'})
                     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
                 with tab_all: show_top_10(df_filtered)
