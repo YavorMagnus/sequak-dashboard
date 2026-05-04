@@ -708,14 +708,16 @@ elif page == "📈 Анализи и Справки (РО)":
             
         if not df_hist.empty:
             df_hist['created_at'] = pd.to_datetime(df_hist['created_at'], errors='coerce')
-            df_hist['completed_date'] = pd.to_datetime(df_hist['completed_date'], errors='coerce')
+        else:
+            # Защита срещу KeyError, ако историята е напълно празна
+            df_hist = pd.DataFrame(columns=['id', 'complaint_id', 'action_type', 'action_details', 'assigned_to', 'deadline_date', 'created_by', 'created_at'])
             
     except Exception as e:
         st.error(f"Грешка при зареждане на данните: {e}")
         df_comp = pd.DataFrame()
         df_hist = pd.DataFrame()
 
-    if df_comp.empty or df_hist.empty:
+    if df_comp.empty:
         st.info("⚠️ Няма достатъчно данни в системата за генериране на справки.")
     else:
         # --- ФИЛТРИ ---
@@ -881,11 +883,9 @@ elif page == "📈 Анализи и Справки (РО)":
         st.markdown("---")
         with st.expander("📥 Експорт на данните (Excel)"):
             if not df_comp.empty:
-                # Намиране на най-стария и най-новия запис за автокорекция
                 min_date_db = df_comp['event_datetime'].min()
                 max_date_db = df_comp['event_datetime'].max()
                 
-                # Защита, ако базата няма валидни дати
                 min_date = min_date_db.date() if pd.notna(min_date_db) else today.date()
                 max_date = max_date_db.date() if pd.notna(max_date_db) else today.date()
                 
@@ -906,7 +906,6 @@ elif page == "📈 Анализи и Справки (РО)":
                     if 'companies' in export_df.columns:
                         export_df = export_df.drop(columns=['companies'])
                     
-                    # Почистване на часовите зони (Timezone stripping) за да не гърми Excel
                     for col in export_df.select_dtypes(include=['datetime64[ns, UTC]', 'datetime64[ns, tz]', 'datetimetz']).columns:
                         export_df[col] = export_df[col].dt.tz_localize(None)
                         
