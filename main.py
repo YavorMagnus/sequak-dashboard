@@ -208,6 +208,7 @@ def show_ticket_details(ticket):
                     "complaint_id": ticket['id'], "action_type": "Резултат от проверка", 
                     "action_details": check_result, "created_by": "Контролинг"
                 }).execute()
+                # При приключване на проверка, нулираме срока, за да не свети просрочено, докато умуваме
                 supabase.table("complaints").update({"current_status": "Чака заключение и препоръка", "current_deadline": None}).eq("id", ticket['id']).execute()
                 st.rerun()
 
@@ -233,8 +234,16 @@ def show_ticket_details(ticket):
                 st.error("Моля, изберете Заключение и Препоръка!")
             elif new_rec == "Проверка (поле)" and not field_details:
                 st.error("Моля, опишете какво ще се проверява.")
+            elif new_rec != "Проверка (поле)" and assignee == "Избери...":
+                # Нова защита: Не даваме да се запази стъпка (различна от проверка), ако не е посочен отговорник
+                st.error("Моля, изберете на кого възлагате изпълнението (Роля)!")
             else:
-                next_status = "Чака проверка" if new_rec == "Проверка (поле)" else "Чака възлагане"
+                # Нова логика за статусите
+                if new_rec == "Проверка (поле)":
+                    next_status = "Чака проверка"
+                else:
+                    next_status = "Чака приключване" # Щом има assignee, значи сме го възложили за изпълнение
+                    
                 action_text = f"Заключение: {new_conc} | Препоръка: {new_rec}"
                 full_details = f"{action_text}. Детайли: {field_details}" if field_details else action_text
 
@@ -453,7 +462,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
                         overdue = 0
                         for _, row in comp_data.iterrows():
                             dl_val = row.get('current_deadline')
-                            # ЗАЩИТА: Проверяваме и тук дали срокът е валиден
                             if row.get('current_status') != 'Приключено' and pd.notna(dl_val):
                                 dt_obj = pd.to_datetime(dl_val, errors='coerce')
                                 if pd.notna(dt_obj) and dt_obj.date() < datetime.date.today():
