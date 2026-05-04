@@ -57,7 +57,6 @@ def standardize_company_code(excel_name):
     if 'cmx' in name: return 'CMX'
     return str(excel_name).upper().strip()
 
-# --- УМЕН ПАРСЪР ЗА ЧАС ---
 def parse_smart_time(t_str):
     if not t_str: return None
     t_str = str(t_str).strip()
@@ -89,10 +88,56 @@ RECOMMENDATIONS = ["Техническа корекция", "Обучение", 
 TERMINAL_STATUSES = ["Приключено", "Сгрешен/Анулиран"]
 
 # ==========================================================
+# --- ЛОГИКА ЗА КРОС-СИГНАЛИЗИРАНЕ (ДУБЛИКАТИ) ---
+# ==========================================================
+def get_related_signals(ticket, df_complaints):
+    if df_complaints is None or df_complaints.empty:
+        return pd.DataFrame()
+        
+    c_phone = str(ticket.get('client_phone', '')).strip()
+    c_email = str(ticket.get('client_email', '')).strip()
+    c_eik = str(ticket.get('client_eik', '')).strip()
+    
+    # Ако няма нито един от тези идентификатори, няма как да търсим
+    if not c_phone and not c_email and not c_eik:
+        return pd.DataFrame()
+        
+    t_date = pd.to_datetime(ticket.get('event_datetime'), errors='coerce')
+    if pd.isna(t_date): return pd.DataFrame()
+    
+    # 1. Изключваме текущия сигнал и търсим разлика във времето <= 30 дни
+    mask = (df_complaints['id'] != ticket['id'])
+    
+    date_diff = (pd.to_datetime(df_complaints['event_datetime'], errors='coerce') - t_date).abs()
+    mask &= (date_diff.dt.days <= 30)
+    
+    # 2. Търсим съвпадение по поне един от критериите
+    match_cond = pd.Series(False, index=df_complaints.index)
+    if c_phone: match_cond |= (df_complaints['client_phone'].astype(str).str.strip() == c_phone)
+    if c_email: match_cond |= (df_complaints['client_email'].astype(str).str.strip() == c_email)
+    if c_eik: match_cond |= (df_complaints['client_eik'].astype(str).str.strip() == c_eik)
+    
+    return df_complaints[mask & match_cond]
+
+# ==========================================================
 # --- ПОПЪП ДИАЛОЗИ (ПЪЛЕН КАРТОН) ---
 # ==========================================================
 @st.dialog("Картон на сигнала", width="large")
-def show_ticket_details(ticket):
+def show_ticket_details(ticket, df_complaints_param):
+    # ПРОВЕРКА ЗА ДУБЛИРАЩИ СЕ/СВЪРЗАНИ СИГНАЛИ
+    related_df = get_related_signals(ticket, df_complaints_param)
+    
+    if not related_df.empty:
+        st.error(f"⚠️ **ВНИМАНИЕ: Открити са {len(related_df)} свързани сигнала за този клиент през последните 30 дни!**")
+        for _, dup_row in related_df.iterrows():
+            dup_date = pd.to_datetime(dup_row.get('event_datetime')).strftime('%d.%m.%Y')
+            dup_status = dup_row.get('current_status', 'Неопределен')
+            with st.expander(f"Свързан сигнал от {dup_date} ({dup_row.get('Фирма', '')}) - Статус: {dup_status}"):
+                st.markdown(f"**Канал:** {dup_row.get('channel', '-')} | **Касае:** {dup_row.get('case_type', '-')}")
+                st.markdown(f"**Описание:** {dup_row.get('description', '-')}")
+                st.info("💡 *Бележка: За да редактирате този свързан сигнал, използвайте Търсачката.*")
+        st.markdown("---")
+
     st.markdown(f"### Сигнал от: **{ticket.get('client_name', 'Неизвестен')}**")
     st.caption(f"Дата: {ticket.get('event_datetime', '')} | Канал: {ticket.get('channel', '')} | Касае: {ticket.get('case_type', '')}")
     
@@ -312,10 +357,14 @@ def show_company_tickets(company_code, df_complaints):
             if pd.notna(dt_obj) and dt_obj.date() < datetime.date.today():
                 is_overdue = True
                 
+        # Проверка за дубликат (за бадж)
+        has_dup = not get_related_signals(row, df_complaints).empty
+        dup_badge = " <span style='color:#ff4b4b;' title='Има свързани сигнали (30 дни)'>🚨</span>" if has_dup else ""
+                
         colA, colB, colC = st.columns([3, 2, 1])
         with colA:
             strike = "s" if status == "Сгрешен/Анулиран" else "strong"
-            client_display = f"👤 <{strike}>{client}</{strike}>" + (" <span style='color:#00aaff;'>🔵 [В диспут]</span>" if has_client_action and status not in TERMINAL_STATUSES else "")
+            client_display = f"👤 <{strike}>{client}</{strike}>{dup_badge}" + (" <span style='color:#00aaff;'>🔵 [В диспут]</span>" if has_client_action and status not in TERMINAL_STATUSES else "")
             st.markdown(client_display, unsafe_allow_html=True)
             dt_str = pd.to_datetime(row.get('event_datetime')).strftime('%d.%m.%Y %H:%M') if pd.notna(row.get('event_datetime')) else ""
             st.caption(f"Дата: {dt_str}")
@@ -326,7 +375,7 @@ def show_company_tickets(company_code, df_complaints):
                 st.markdown("<span style='color:red; font-size:0.8em;'>⚠️ Просрочен!</span>", unsafe_allow_html=True)
         with colC:
             if st.button("Отвори", key=f"btn_open_{row['id']}"):
-                show_ticket_details(row.to_dict())
+                show_ticket_details(row.to_dict(), df_complaints)
         st.divider()
 
 # ==========================================================
@@ -446,6 +495,16 @@ elif page == "📝 Регистър Оплаквания (РО)":
     if 'active_company' not in st.session_state:
         st.session_state.active_company = None
         
+    # Зареждане на данните глобално за страницата
+    try:
+        res = supabase.table("complaints").select("*, companies(code)").execute()
+        df_complaints = pd.DataFrame(res.data)
+        if not df_complaints.empty:
+            df_complaints['Фирма'] = df_complaints['companies'].apply(lambda x: x.get('code', '') if isinstance(x, dict) else '')
+    except Exception as e:
+        st.error(f"Грешка при връзка с DB: {e}")
+        df_complaints = pd.DataFrame()
+        
     tab_list, tab_new = st.tabs(["👁️ Птичи поглед (Дашборд)", "➕ Въвеждане на нов сигнал"])
     
     # ==========================================
@@ -454,15 +513,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
     with tab_list:
         st.markdown("### Активно следене на процеси по фирми")
         st.caption("Кликнете върху бутона под дадена фирма, за да видите детайли и просрочия.")
-        
-        try:
-            res = supabase.table("complaints").select("*, companies(code)").execute()
-            df_complaints = pd.DataFrame(res.data)
-            if not df_complaints.empty:
-                df_complaints['Фирма'] = df_complaints['companies'].apply(lambda x: x.get('code', '') if isinstance(x, dict) else '')
-        except Exception as e:
-            st.error(f"Грешка при връзка с DB: {e}")
-            df_complaints = pd.DataFrame()
 
         NUM_COLS_PER_ROW = 4
         cols = st.columns(NUM_COLS_PER_ROW)
@@ -511,7 +561,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
         
         if not df_complaints.empty:
             if search_query:
-                # Филтрираме базата данни спрямо въведеното (case-insensitive)
                 q = search_query.lower()
                 search_cols = ['client_name', 'client_phone', 'client_email', 'client_eik', 'contract_number', 'machines', 'call_number']
                 mask = False
@@ -544,9 +593,12 @@ elif page == "📝 Регистър Оплаквания (РО)":
                         dt_str = pd.to_datetime(row.get('event_datetime')).strftime('%d.%m.%Y %H:%M') if pd.notna(row.get('event_datetime')) else ""
                         r_col1.write(dt_str)
                         
+                        has_dup = not get_related_signals(row, df_complaints).empty
+                        dup_badge = " <span style='color:#ff4b4b;' title='Има свързани сигнали (30 дни)'>🚨</span>" if has_dup else ""
+                        
                         client = row.get('client_name', 'Неизвестен')
                         strike = "s" if status == "Сгрешен/Анулиран" else "span"
-                        r_col2.markdown(f"<{strike}>{client}</{strike}>", unsafe_allow_html=True)
+                        r_col2.markdown(f"<{strike}>{client}</{strike}>{dup_badge}", unsafe_allow_html=True)
                         
                         r_col3.write(row.get('Фирма', ''))
                         
@@ -555,7 +607,7 @@ elif page == "📝 Регистър Оплаквания (РО)":
                         
                         with r_col5:
                             if st.button("Отвори", key=f"btn_rec_{row['id']}"):
-                                show_ticket_details(row.to_dict())
+                                show_ticket_details(row.to_dict(), df_complaints)
                         
                         st.markdown("<hr style='margin: 0.2em 0; opacity: 0.2'>", unsafe_allow_html=True)
         else:
@@ -641,7 +693,7 @@ elif page == "📝 Регистър Оплаквания (РО)":
                         }
                         
                         supabase.table("complaints").insert(new_record).execute()
-                        st.success(f"✅ Картонът е създаден успешно! Можете да го отворите от таблицата 'Последни 20' в таб 'Птичи поглед'.")
+                        st.success(f"✅ Картонът е създаден успешно! Можете да го отворите от таблицата 'Последни 20'.")
                         st.session_state.form_key += 1
                         st.rerun()
                     except Exception as e:
