@@ -86,6 +86,7 @@ def parse_smart_time(t_str):
 ROLES_LIST = ["Служител", "Пряк ръководител", "Отговорник качество", "Управител", "Контролинг", "RXG-адм", "CEO", "Друг"]
 CONCLUSIONS = ["Техническа грешка", "Липса на знания/умения", "Нарушение", "Не сме сигурни", "Липса на ресурс", "Дезорганизация", "Идея за подобрение", "Друго", "Грешим/няма проблем"]
 RECOMMENDATIONS = ["Техническа корекция", "Обучение", "Наказание", "Проверка (поле)", "Планиране на ресурс", "Реорганизация", "Обсъждане с колеги", "Друго", "Нищо"]
+TERMINAL_STATUSES = ["Приключено", "Сгрешен/Анулиран"] # Статуси, при които сигналът спира да е активен
 
 # ==========================================================
 # --- ПОПЪП ДИАЛОЗИ (ПЪЛЕН КАРТОН) ---
@@ -129,6 +130,17 @@ def show_ticket_details(ticket):
 
     st.markdown("---")
     
+    current_status = ticket.get('current_status', 'Чака заключение и препоръка')
+    
+    # Ако сигналът е анулиран или приключен, показваме само банер и скриваме формите
+    if current_status == "Сгрешен/Анулиран":
+        st.error("🚫 Този сигнал е маркиран като СГРЕШЕН / АНУЛИРАН и е заключен за редакция.")
+        return
+    elif current_status == "Приключено":
+        st.success("✅ Този сигнал е ПРИКЛЮЧЕН.")
+        # Може да продължиш надолу, ако искаш да дадеш възможност за ре-отваряне, но засега го заключваме
+        return
+
     # =========================================================
     # --- ВТОРОСТЕПЕНЕН СТРИЙМ: РАБОТА С КЛИЕНТ (СИНЯ ЗОНА) ---
     # =========================================================
@@ -138,7 +150,6 @@ def show_ticket_details(ticket):
     current_client_action = ticket.get('client_action_needed', False)
     new_client_action = st.toggle("Извънреден диспут: Очаква се действие с клиента", value=current_client_action, key=f"tgl_{ticket['id']}")
     
-    # Логика за запазване при промяна на шалтера
     if new_client_action != current_client_action:
         supabase.table("complaints").update({"client_action_needed": new_client_action}).eq("id", ticket['id']).execute()
         action_text = "Активиран" if new_client_action else "Дезактивиран"
@@ -149,7 +160,6 @@ def show_ticket_details(ticket):
         }).execute()
         st.rerun()
 
-    # Ако е активиран, показваме синята зона за работа
     if new_client_action:
         st.markdown('<div class="client-stream"><h4>Въвеждане на комуникация</h4>', unsafe_allow_html=True)
         
@@ -193,7 +203,6 @@ def show_ticket_details(ticket):
     # --- ГЛАВЕН СТРИЙМ: КОНТРОЛИНГ (ВЪТРЕШЕН ПРОЦЕС) ---
     # =========================================================
     st.subheader("⚙️ Продължаване на процеса (Вътрешен)")
-    current_status = ticket.get('current_status', 'Чака заключение и препоръка')
     st.write(f"Текущ мастър статус: **{current_status}**")
     
     if current_status == "Чака проверка":
@@ -208,7 +217,6 @@ def show_ticket_details(ticket):
                     "complaint_id": ticket['id'], "action_type": "Резултат от проверка", 
                     "action_details": check_result, "created_by": "Контролинг"
                 }).execute()
-                # При приключване на проверка, нулираме срока, за да не свети просрочено, докато умуваме
                 supabase.table("complaints").update({"current_status": "Чака заключение и препоръка", "current_deadline": None}).eq("id", ticket['id']).execute()
                 st.rerun()
 
@@ -235,14 +243,12 @@ def show_ticket_details(ticket):
             elif new_rec == "Проверка (поле)" and not field_details:
                 st.error("Моля, опишете какво ще се проверява.")
             elif new_rec != "Проверка (поле)" and assignee == "Избери...":
-                # Нова защита: Не даваме да се запази стъпка (различна от проверка), ако не е посочен отговорник
                 st.error("Моля, изберете на кого възлагате изпълнението (Роля)!")
             else:
-                # Нова логика за статусите
                 if new_rec == "Проверка (поле)":
                     next_status = "Чака проверка"
                 else:
-                    next_status = "Чака приключване" # Щом има assignee, значи сме го възложили за изпълнение
+                    next_status = "Чака приключване"
                     
                 action_text = f"Заключение: {new_conc} | Препоръка: {new_rec}"
                 full_details = f"{action_text}. Детайли: {field_details}" if field_details else action_text
@@ -261,8 +267,31 @@ def show_ticket_details(ticket):
             supabase.table("complaint_history").insert({"complaint_id": ticket['id'], "action_type": "Сигналът е приключен", "created_by": "Контролинг"}).execute()
             st.rerun()
 
+    st.markdown("---")
+    # =========================================================
+    # --- ОПЦИЯ ЗА АНУЛИРАНЕ (SOFT DELETE) ---
+    # =========================================================
+    with st.expander("🚫 Опции за анулиране (Сгрешен запис)"):
+        st.warning("Внимание: Анулирането ще преустанови следенето на този сигнал.")
+        cancel_reason = st.text_input("Причина за анулиране (задължително):", key=f"cancel_reason_{ticket['id']}")
+        if st.button("ПОТВЪРДИ АНУЛИРАНЕТО", type="secondary", key=f"btn_cancel_{ticket['id']}"):
+            if not cancel_reason.strip():
+                st.error("Моля, въведете причина за анулирането.")
+            else:
+                supabase.table("complaint_history").insert({
+                    "complaint_id": ticket['id'], 
+                    "action_type": "Сигналът е АНУЛИРАН", 
+                    "action_details": f"Причина: {cancel_reason}", 
+                    "created_by": "Контролинг"
+                }).execute()
+                supabase.table("complaints").update({
+                    "current_status": "Сгрешен/Анулиран", 
+                    "current_deadline": None
+                }).eq("id", ticket['id']).execute()
+                st.rerun()
+
 # ==========================================================
-# --- ФУНКЦИЯ ЗА РЕНДЕРИРАНЕ НА СПИСЪК (ВЕЧЕ НЕ Е ПОП-ЪП) ---
+# --- ФУНКЦИЯ ЗА РЕНДЕРИРАНЕ НА СПИСЪК ---
 # ==========================================================
 def show_company_tickets(company_code, df_complaints):
     col_title, col_btn = st.columns([4, 1])
@@ -290,19 +319,20 @@ def show_company_tickets(company_code, df_complaints):
         is_overdue = False
         deadline_val = row.get('current_deadline')
         
-        # ЗАЩИТА: Проверяваме дали срокът съществува и е валиден преди да го конвертираме
-        if pd.notna(deadline_val) and status != "Приключено":
+        if pd.notna(deadline_val) and status not in TERMINAL_STATUSES:
             dt_obj = pd.to_datetime(deadline_val, errors='coerce')
             if pd.notna(dt_obj) and dt_obj.date() < datetime.date.today():
                 is_overdue = True
                 
         colA, colB, colC = st.columns([3, 2, 1])
         with colA:
-            client_display = f"👤 **{client}**" + (" <span style='color:#00aaff;'>🔵 [В диспут]</span>" if has_client_action else "")
+            # Ако е анулиран, името е задраскано (или просто по-бледо)
+            strike = "s" if status == "Сгрешен/Анулиран" else "strong"
+            client_display = f"👤 <{strike}>{client}</{strike}>" + (" <span style='color:#00aaff;'>🔵 [В диспут]</span>" if has_client_action and status not in TERMINAL_STATUSES else "")
             st.markdown(client_display, unsafe_allow_html=True)
             st.caption(f"Дата: {row.get('event_datetime', '')}")
         with colB:
-            color = "red" if is_overdue else "green" if status == "Приключено" else "orange"
+            color = "gray" if status == "Сгрешен/Анулиран" else "red" if is_overdue else "green" if status == "Приключено" else "orange"
             st.markdown(f"Статус: <span style='color:{color}'>{status}</span>", unsafe_allow_html=True)
             if is_overdue:
                 st.markdown("<span style='color:red; font-size:0.8em;'>⚠️ Просрочен!</span>", unsafe_allow_html=True)
@@ -457,12 +487,15 @@ elif page == "📝 Регистър Оплаквания (РО)":
                     
                     if not df_complaints.empty and 'Фирма' in df_complaints.columns:
                         comp_data = df_complaints[df_complaints['Фирма'] == comp]
-                        unresolved = len(comp_data[comp_data['current_status'] != 'Приключено'])
-                        in_dispute = len(comp_data[(comp_data['current_status'] != 'Приключено') & (comp_data['client_action_needed'] == True)])
+                        
+                        # Не броим Приключени и Анулирани
+                        unresolved = len(comp_data[~comp_data['current_status'].isin(TERMINAL_STATUSES)])
+                        in_dispute = len(comp_data[(~comp_data['current_status'].isin(TERMINAL_STATUSES)) & (comp_data['client_action_needed'] == True)])
+                        
                         overdue = 0
                         for _, row in comp_data.iterrows():
                             dl_val = row.get('current_deadline')
-                            if row.get('current_status') != 'Приключено' and pd.notna(dl_val):
+                            if row.get('current_status') not in TERMINAL_STATUSES and pd.notna(dl_val):
                                 dt_obj = pd.to_datetime(dl_val, errors='coerce')
                                 if pd.notna(dt_obj) and dt_obj.date() < datetime.date.today():
                                     overdue += 1
