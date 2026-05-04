@@ -397,14 +397,13 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 3.5")
+st.sidebar.caption("Входът е защитен. Версия 3.6")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
 # ==========================================================
 if page == "📊 Оперативен Дашборд (ПП)":
     try:
-        # ДОБАВЕН ЛИМИТ ОТ 10 000 РЕДА
         response_pp = supabase.table("missed_profits").select("*, companies(code)").limit(10000).execute()
         df_pp = pd.DataFrame(response_pp.data)
         
@@ -577,12 +576,12 @@ if page == "📊 Оперативен Дашборд (ПП)":
                             df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date', 'company_id'])
                             df_to_insert = df_to_insert.replace({float('nan'): None, np.nan: None})
                             
-                            # --- НОВ БРОНИРАН ФИЛТЪР ЗА ДУБЛИКАТИ ---
+                            # --- НОВ БРОНИРАН ФИЛТЪР (СЪС СЕКУНДИ) ---
                             existing_fingerprints = set()
                             if not df_pp.empty and 'event_date' in df_pp.columns:
                                 db_cmp = df_pp['company_id'].astype(str).str.strip()
                                 db_tag = df_pp['item_tag'].astype(str).str.strip().str.lower()
-                                db_date = pd.to_datetime(df_pp['event_date'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
+                                db_date = pd.to_datetime(df_pp['event_date'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S')
                                 db_val = pd.to_numeric(df_pp['total_value_eur'], errors='coerce').fillna(0).round(2).astype(str)
                                 
                                 existing_sigs = db_cmp + "|" + db_tag + "|" + db_date + "|" + db_val
@@ -590,7 +589,7 @@ if page == "📊 Оперативен Дашборд (ПП)":
 
                             new_cmp = df_to_insert['company_id'].astype(str).str.strip()
                             new_tag = df_to_insert['item_tag'].astype(str).str.strip().str.lower()
-                            new_date = pd.to_datetime(df_to_insert['event_date'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M')
+                            new_date = pd.to_datetime(df_to_insert['event_date'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S')
                             new_val = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0).round(2).astype(str)
 
                             df_to_insert['fingerprint'] = new_cmp + "|" + new_tag + "|" + new_date + "|" + new_val
@@ -622,7 +621,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
         st.session_state.active_company = None
         
     try:
-        # ДОБАВЕН ЛИМИТ ОТ 10 000 РЕДА
         res = supabase.table("complaints").select("*, companies(code)").limit(10000).execute()
         df_complaints = pd.DataFrame(res.data)
         if not df_complaints.empty:
@@ -798,7 +796,6 @@ elif page == "📈 Анализи и Справки (РО)":
     st.markdown("---")
     
     try:
-        # ДОБАВЕНИ ЛИМИТИ
         res_comp = supabase.table("complaints").select("*, companies(code)").limit(10000).execute()
         df_comp = pd.DataFrame(res_comp.data)
         
