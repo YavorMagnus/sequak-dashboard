@@ -7,6 +7,7 @@ from datetime import timedelta
 from dateutil.relativedelta import relativedelta
 import re
 import plotly.express as px
+import io
 
 # --- НАСТРОЙКИ НА СТРАНИЦАТА ---
 st.set_page_config(page_title="SequaK Workspace", page_icon="🏗️", layout="wide")
@@ -230,7 +231,7 @@ def show_ticket_details(ticket, df_complaints_param):
                 "created_by": "Контролинг"
             }
             supabase.table("complaint_history").insert(history_payload).execute()
-            st.success("Действието с клиента е записа в хронологията!")
+            st.success("Действието с клиента е записано в хронологията!")
             st.rerun()
             
         st.markdown('</div>', unsafe_allow_html=True)
@@ -299,7 +300,6 @@ def show_ticket_details(ticket, df_complaints_param):
                 
         if close_ticket:
             supabase.table("complaints").update({"current_status": "Приключено", "current_deadline": None}).eq("id", ticket['id']).execute()
-            # За да хванем датата на приключване за справките, записваме я експлицитно в action_type
             supabase.table("complaint_history").insert({"complaint_id": ticket['id'], "action_type": "Сигналът е приключен", "created_by": "Контролинг"}).execute()
             st.rerun()
 
@@ -478,7 +478,7 @@ if page == "📊 Оперативен Дашборд (ПП)":
                         else:
                             records = df_final.to_dict(orient='records')
                             supabase.table("missed_profits").insert(records).execute()
-                            st.success(f"🎉 Успешно добавени {len(df_final)} НОВপদে НОВИ записа! Презареждам...")
+                            st.success(f"🎉 Успешно добавени {len(df_final)} НОВИ записа! Презареждам...")
                             st.rerun() 
                     else:
                         st.warning("⚠️ Липсват нужни колони.")
@@ -695,7 +695,6 @@ elif page == "📈 Анализи и Справки (РО)":
     st.title("📈 Анализи и Справки (РО)")
     st.markdown("---")
     
-    # 1. Зареждане на масива с данни (Complaints & History)
     try:
         res_comp = supabase.table("complaints").select("*, companies(code)").execute()
         df_comp = pd.DataFrame(res_comp.data)
@@ -705,7 +704,6 @@ elif page == "📈 Анализи и Справки (РО)":
         
         if not df_comp.empty:
             df_comp['Фирма'] = df_comp['companies'].apply(lambda x: x.get('code', 'UNKNOWN') if isinstance(x, dict) else 'UNKNOWN')
-            # Важно: Конвертираме датите
             df_comp['event_datetime'] = pd.to_datetime(df_comp['event_datetime'], errors='coerce')
             
         if not df_hist.empty:
@@ -723,7 +721,6 @@ elif page == "📈 Анализи и Справки (РО)":
         # --- ФИЛТРИ ---
         col_f1, col_f2 = st.columns(2)
         with col_f1:
-            # Списъкът включва "Всички фирми" + уникалните кодове
             company_options = ["Всички фирми (Холдинг)"] + sorted([c for c in df_comp['Фирма'].unique() if c])
             selected_company = st.selectbox("Избор на обхват:", company_options)
             
@@ -732,9 +729,8 @@ elif page == "📈 Анализи и Справки (РО)":
 
         st.markdown("---")
 
-        # --- ИЗЧИСЛЯВАНЕ НА ПЕРИОДИ (Текущ и Предходен) ---
+        # --- ИЗЧИСЛЯВАНЕ НА ПЕРИОДИ ---
         today = pd.to_datetime(datetime.date.today())
-        # today = pd.to_datetime("2026-05-04") # За тестове, ако искаш да симулираш дата според контекста
         
         if period_option == "Текущ месец":
             start_current = today.replace(day=1)
@@ -774,14 +770,11 @@ elif page == "📈 Анализи и Справки (РО)":
         else:
             df_filtered = df_comp.copy()
             
-        # За да не гърми, ако фирмата няма сигнали
         if df_filtered.empty:
              st.warning(f"Няма регистрирани сигнали за {selected_company}.")
         else:
-            # Премахваме анулираните сигнали от общите сметки
             df_active = df_filtered[df_filtered['current_status'] != 'Сгрешен/Анулиран'].copy()
 
-            # --- ПОДГОТОВКА НА ДАННИ: Постъпили ---
             mask_current_in = (df_active['event_datetime'] >= start_current) & (df_active['event_datetime'] <= end_current)
             mask_prev_in = (df_active['event_datetime'] >= start_prev) & (df_active['event_datetime'] <= end_prev)
             
@@ -792,14 +785,9 @@ elif page == "📈 Анализи и Справки (РО)":
             count_in_prev = len(df_prev_in)
             delta_in = count_in_current - count_in_prev
 
-            # --- ПОДГОТОВКА НА ДАННИ: Приключени ---
-            # Намираме кога реално са приключени от history таблицата
             closed_history = df_hist[df_hist['action_type'] == "Сигналът е приключен"].copy()
-            
-            # Джойнваме с активните сигнали, за да вземем само тези от избраната фирма
             closed_merged = pd.merge(df_active[['id', 'current_status']], closed_history[['complaint_id', 'created_at']], left_on='id', right_on='complaint_id', how='inner')
             
-            # Филтрираме по дата на приключване (created_at в history)
             mask_current_closed = (closed_merged['created_at'] >= pd.to_datetime(start_current, utc=True)) & (closed_merged['created_at'] <= pd.to_datetime(end_current, utc=True))
             mask_prev_closed = (closed_merged['created_at'] >= pd.to_datetime(start_prev, utc=True)) & (closed_merged['created_at'] <= pd.to_datetime(end_prev, utc=True))
             
@@ -807,7 +795,6 @@ elif page == "📈 Анализи и Справки (РО)":
             count_closed_prev = len(closed_merged[mask_prev_closed])
             delta_closed = count_closed_current - count_closed_prev
             
-            # % Приключени (от всички приключени за холдинга) - само ако е избрана конкретна фирма
             pct_holding_str = ""
             if selected_company != "Всички фирми (Холдинг)":
                 holding_active = df_comp[df_comp['current_status'] != 'Сгрешен/Анулиран']
@@ -818,12 +805,9 @@ elif page == "📈 Анализи и Справки (РО)":
                     pct = (count_closed_current / total_holding_closed) * 100
                     pct_holding_str = f"({pct:.1f}% от холдинга)"
 
-            # --- ПОДГОТОВКА НА ДАННИ: Диспути ---
-            # Брой влезли в диспут през периода (без значение дали са приключени)
             dispute_history = df_hist[df_hist['action_type'] == "Диспут с клиент: Активиран"].copy()
             dispute_merged = pd.merge(df_active[['id']], dispute_history[['complaint_id', 'created_at']], left_on='id', right_on='complaint_id', how='inner')
             
-            # Взимаме само уникалните ID-та, защото може да е активиран/дезактивиран няколко пъти
             current_disputes_ids = dispute_merged[(dispute_merged['created_at'] >= pd.to_datetime(start_current, utc=True)) & (dispute_merged['created_at'] <= pd.to_datetime(end_current, utc=True))]['complaint_id'].unique()
             count_disputes_current = len(current_disputes_ids)
             
@@ -832,61 +816,26 @@ elif page == "📈 Анализи и Справки (РО)":
             
             pct_disputes = (count_disputes_current / count_in_current * 100) if count_in_current > 0 else 0
 
-            # --- ПОДГОТОВКА НА ДАННИ: Просрочия ---
-            # Това е най-сложната част, защото трябва да проверим историята
-            # Взимаме всички стъпки (Назначена стъпка), които имат deadline_date
-            tasks_history = df_hist[df_hist['deadline_date'].notna()].copy()
-            tasks_merged = pd.merge(df_active[['id']], tasks_history[['complaint_id', 'deadline_date', 'created_at']], left_on='id', right_on='complaint_id', how='inner')
-            
-            # Търсим просрочия: deadline_date е преди днес ИЛИ преди следващото действие
-            # За улеснение в тази справка: Броим задачите, чийто срок е изтекъл ПРЕЗ анализирания период
-            tasks_merged['deadline_date'] = pd.to_datetime(tasks_merged['deadline_date'], errors='coerce')
-            
-            current_tasks = tasks_merged[(tasks_merged['deadline_date'] >= pd.to_datetime(start_current)) & (tasks_merged['deadline_date'] <= pd.to_datetime(end_current))]
-            
-            # Логика за просрочие: Тъй като не пазим точна 'completed_date' за всяка стъпка отделно (записваме ново action), 
-            # ще броим за просрочени тези, които са в текущия период и статусът им все още е активен, ИЛИ
-            # ще направим опростена метрика: "Сигнали с изтекъл срок в текущия момент"
-            
-            # f. Брой просрочени задачи (total delays) - Засега ще ползваме текущата снимка (от Дашборда)
-            # Тъй като историческото проследяване на просрочията изисква сложен time-series анализ
-            
             overdue_signals_count = 0
-            total_delays = 0
-            
             for _, row in df_active.iterrows():
                 dl_val = row.get('current_deadline')
                 if pd.notna(dl_val) and row.get('current_status') not in TERMINAL_STATUSES:
                     dt_obj = pd.to_datetime(dl_val, errors='coerce')
                     if pd.notna(dt_obj) and dt_obj.date() < today.date():
                         overdue_signals_count += 1
-                        total_delays += 1 # Засега f = e (по един текущ изтекъл срок на сигнал)
             
             pct_overdue = (overdue_signals_count / count_in_current * 100) if count_in_current > 0 else 0
 
 
-            # ==========================================
-            # РЕНДЕРИРАНЕ НА МЕТРИКИТЕ (КАРТИ)
-            # ==========================================
             st.markdown('<div class="analytic-card">', unsafe_allow_html=True)
             m_col1, m_col2, m_col3, m_col4 = st.columns(4)
-            
             m_col1.metric("Постъпили (Входирани)", count_in_current, delta=delta_in, help=f"Брой създадени картони в периода {start_current.strftime('%d.%m')} - {end_current.strftime('%d.%m')}")
-            
             m_col2.metric("Приключени", f"{count_closed_current} {pct_holding_str}", delta=delta_closed, help="Брой сигнали, маркирани като 'Приключено' през избрания период.")
-            
             m_col3.metric("Влезли в диспут", f"{count_disputes_current} ({pct_disputes:.1f}%)", delta=delta_disputes, help="% от общо постъпилите за периода.")
-            
             m_col4.metric("С просрочия (Към момента)", f"{overdue_signals_count} ({pct_overdue:.1f}%)", help="Брой активни сигнали с изтекъл срок. % спрямо постъпилите.")
-            
             st.markdown('</div>', unsafe_allow_html=True)
 
-            # ==========================================
-            # РЕНДЕРИРАНЕ НА ГРАФИКИ
-            # ==========================================
             g_col1, g_col2 = st.columns(2)
-            
-            # --- Графика A: Канали на постъпване ---
             with g_col1:
                 st.subheader("Постъпили по Канал")
                 if count_in_current > 0:
@@ -898,21 +847,15 @@ elif page == "📈 Анализи и Справки (РО)":
                 else:
                     st.info("Няма постъпили сигнали за този период.")
 
-            # --- Графика C: Първи статус от контролинг ---
             with g_col2:
                 st.subheader("Първо Заключение (Приключени)")
                 if count_closed_current > 0:
-                    # За всеки приключен сигнал (count_closed_current) намираме първото му Заключение
                     closed_ids = closed_merged[mask_current_closed]['id'].tolist()
-                    
                     first_conclusions = []
                     for cid in closed_ids:
-                        # Търсим записите 'Назначена стъпка' за този сигнал, сортирани по дата възходящо
                         steps = df_hist[(df_hist['complaint_id'] == cid) & (df_hist['action_type'] == 'Назначена стъпка')].sort_values(by='created_at')
                         if not steps.empty:
-                            # Взимаме първия (най-стария) запис
                             first_step_detail = steps.iloc[0]['action_details']
-                            # Парсваме Заключението (напр. "Заключение: Техническа грешка | Препоръка: ...")
                             match = re.search(r"Заключение:\s*(.*?)\s*\|", first_step_detail)
                             if match:
                                 first_conclusions.append(match.group(1).strip())
@@ -931,3 +874,61 @@ elif page == "📈 Анализи и Справки (РО)":
                         st.info("Не са намерени заключения за приключените сигнали.")
                 else:
                     st.info("Няма приключени сигнали за този период.")
+
+        # =========================================================
+        # --- ЕКСПОРТ НА ДАННИ (EXCEL) ---
+        # =========================================================
+        st.markdown("---")
+        with st.expander("📥 Експорт на данните (Excel)"):
+            if not df_comp.empty:
+                # Намиране на най-стария и най-новия запис за автокорекция
+                min_date_db = df_comp['event_datetime'].min()
+                max_date_db = df_comp['event_datetime'].max()
+                
+                # Защита, ако базата няма валидни дати
+                min_date = min_date_db.date() if pd.notna(min_date_db) else today.date()
+                max_date = max_date_db.date() if pd.notna(max_date_db) else today.date()
+                
+                col_ex1, col_ex2 = st.columns([1, 2])
+                with col_ex1:
+                    export_dates = st.date_input(
+                        "Период за експорт (Начало - Край):",
+                        value=(min_date, max_date),
+                        min_value=min_date,
+                        max_value=max_date,
+                        help="Периодът автоматично е ограничен до първия и последния запис в базата. Изберете начална и крайна дата."
+                    )
+                    
+                if len(export_dates) == 2:
+                    start_export, end_export = export_dates
+                    export_df = df_comp[(df_comp['event_datetime'].dt.date >= start_export) & (df_comp['event_datetime'].dt.date <= end_export)].copy()
+                    
+                    if 'companies' in export_df.columns:
+                        export_df = export_df.drop(columns=['companies'])
+                    
+                    # Почистване на часовите зони (Timezone stripping) за да не гърми Excel
+                    for col in export_df.select_dtypes(include=['datetime64[ns, UTC]', 'datetime64[ns, tz]', 'datetimetz']).columns:
+                        export_df[col] = export_df[col].dt.tz_localize(None)
+                        
+                    with col_ex2:
+                        st.write(f"Готови за експорт: **{len(export_df)} записа**")
+                        
+                        if len(export_df) > 5000:
+                            st.warning("⚠️ Избрали сте над 5000 записа. Експортът може да отнеме повече време или да натовари системата. Препоръчваме по-кратък период.")
+                        
+                        buffer = io.BytesIO()
+                        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                            export_df.to_excel(writer, index=False, sheet_name='РО_Експорт')
+                        
+                        st.download_button(
+                            label="💾 Изтегли като .xlsx",
+                            data=buffer.getvalue(),
+                            file_name=f"SequaK_RO_{start_export}_to_{end_export}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="primary"
+                        )
+                else:
+                    with col_ex2:
+                        st.info("Моля, изберете начална и крайна дата в календара.")
+            else:
+                st.info("Няма данни за експорт.")
