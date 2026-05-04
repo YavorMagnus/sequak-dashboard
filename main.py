@@ -397,7 +397,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 3.2")
+st.sidebar.caption("Входът е защитен. Версия 3.3")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -456,32 +456,25 @@ if page == "📊 Оперативен Дашборд (ПП)":
             with col_ch1:
                 st.subheader("📑 Анализ по Статус / Фирми")
                 
-                # Създаваме табове, за да имаме и таблицата със статусите, и красивата графика
                 tab_table, tab_chart = st.tabs(["📊 Детайли по Статус", "📈 Обща Графика"])
                 
                 with tab_table:
                     if not df_filtered.empty and 'resolution_status' in df_filtered.columns:
-                        # Подготовка на данните за статусите (всичко с малки букви за сигурно търсене)
                         df_status = df_filtered.copy()
                         df_status['safe_status'] = df_status['resolution_status'].astype(str).str.lower().str.strip()
                         
-                        # Изчисляване на Брой и Сума за 'Отказва се'
                         df_status['refused_count'] = df_status['safe_status'].str.contains('отказва се', na=False).astype(int)
                         df_status['refused_sum'] = np.where(df_status['safe_status'].str.contains('отказва се', na=False), df_status['total_value_eur'], 0)
                         
-                        # Изчисляване на Брой и Сума за 'Нямаме наличност'
                         df_status['no_stock_count'] = df_status['safe_status'].str.contains('нямаме наличност', na=False).astype(int)
                         df_status['no_stock_sum'] = np.where(df_status['safe_status'].str.contains('нямаме наличност', na=False), df_status['total_value_eur'], 0)
                         
-                        # Изчисляване САМО на Брой за 'Не предлагаме'
                         df_status['not_offered_count'] = df_status['safe_status'].str.contains('не предлагаме', na=False).astype(int)
 
-                        # Групиране по Фирма
                         status_summary = df_status.groupby('company_code')[
                             ['refused_count', 'refused_sum', 'no_stock_count', 'no_stock_sum', 'not_offered_count']
                         ].sum().reset_index()
                         
-                        # Преименуване на колоните за по-красив UI
                         status_summary.columns = [
                             'Фирма', 
                             'Отказва се (Бр.)', 'Отказва се (€)', 
@@ -489,10 +482,30 @@ if page == "📊 Оперативен Дашборд (ПП)":
                             'Не предлагаме (Бр.)'
                         ]
                         
-                        # Стилизиране на валутата в таблицата
+                        # --- ДОБАВЯНЕ НА ТОТАЛИ (ПО РЕДОВЕ И КОЛОНИ) ---
+                        # Тотали най-вдясно
+                        status_summary['Общо (Бр.)'] = status_summary['Отказва се (Бр.)'] + status_summary['Няма наличност (Бр.)'] + status_summary['Не предлагаме (Бр.)']
+                        status_summary['Общо (€)'] = status_summary['Отказва се (€)'] + status_summary['Няма наличност (€)']
+                        
+                        # Тотали най-долу (нов ред ОБЩО)
+                        total_row = pd.DataFrame({
+                            'Фирма': ['ОБЩО'],
+                            'Отказва се (Бр.)': [status_summary['Отказва се (Бр.)'].sum()],
+                            'Отказва се (€)': [status_summary['Отказва се (€)'].sum()],
+                            'Няма наличност (Бр.)': [status_summary['Няма наличност (Бр.)'].sum()],
+                            'Няма наличност (€)': [status_summary['Няма наличност (€)'].sum()],
+                            'Не предлагаме (Бр.)': [status_summary['Не предлагаме (Бр.)'].sum()],
+                            'Общо (Бр.)': [status_summary['Общо (Бр.)'].sum()],
+                            'Общо (€)': [status_summary['Общо (€)'].sum()]
+                        })
+                        
+                        status_summary = pd.concat([status_summary, total_row], ignore_index=True)
+
+                        # Стилизиране с новото златно форматиране
                         styled_status = status_summary.style.format({
                             'Отказва се (€)': '€ {:,.2f}',
-                            'Няма наличност (€)': '€ {:,.2f}'
+                            'Няма наличност (€)': '€ {:,.2f}',
+                            'Общо (€)': '€ {:,.2f}'
                         }).set_properties(**{'color': '#FFD700'})
                         
                         st.dataframe(styled_status, use_container_width=True, hide_index=True)
@@ -520,7 +533,10 @@ if page == "📊 Оперативен Дашборд (ПП)":
                         return
                     top_10 = df_to_show.groupby('clean_machine')['total_value_eur'].sum().nlargest(10).reset_index()
                     top_10.columns = ['Машина', 'Изпусната сума (€)']
-                    styled_df = top_10.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFFFFF'})
+                    
+                    # --- ТУК Е ПРОМЯНАТА ЗА ЗЛАТНИТЕ БУКВИ ---
+                    styled_df = top_10.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFD700'})
+                    
                     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
                 with tab_all: show_top_10(df_filtered)
