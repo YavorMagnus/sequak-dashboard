@@ -86,7 +86,7 @@ def parse_smart_time(t_str):
 ROLES_LIST = ["Служител", "Пряк ръководител", "Отговорник качество", "Управител", "Контролинг", "RXG-адм", "CEO", "Друг"]
 CONCLUSIONS = ["Техническа грешка", "Липса на знания/умения", "Нарушение", "Не сме сигурни", "Липса на ресурс", "Дезорганизация", "Идея за подобрение", "Друго", "Грешим/няма проблем"]
 RECOMMENDATIONS = ["Техническа корекция", "Обучение", "Наказание", "Проверка (поле)", "Планиране на ресурс", "Реорганизация", "Обсъждане с колеги", "Друго", "Нищо"]
-TERMINAL_STATUSES = ["Приключено", "Сгрешен/Анулиран"] # Статуси, при които сигналът спира да е активен
+TERMINAL_STATUSES = ["Приключено", "Сгрешен/Анулиран"]
 
 # ==========================================================
 # --- ПОПЪП ДИАЛОЗИ (ПЪЛЕН КАРТОН) ---
@@ -108,7 +108,6 @@ def show_ticket_details(ticket):
     st.info(f"**Описание:** {ticket.get('description', '')}")
     st.markdown("---")
 
-    # --- ХРОНОЛОГИЯ (ИСТОРИЯ) ---
     st.subheader("📋 Хронология на действията")
     history_res = supabase.table("complaint_history").select("*").eq("complaint_id", ticket['id']).order("created_at", desc=False).execute()
     history_data = history_res.data
@@ -132,21 +131,15 @@ def show_ticket_details(ticket):
     
     current_status = ticket.get('current_status', 'Чака заключение и препоръка')
     
-    # Ако сигналът е анулиран или приключен, показваме само банер и скриваме формите
     if current_status == "Сгрешен/Анулиран":
         st.error("🚫 Този сигнал е маркиран като СГРЕШЕН / АНУЛИРАН и е заключен за редакция.")
         return
     elif current_status == "Приключено":
         st.success("✅ Този сигнал е ПРИКЛЮЧЕН.")
-        # Може да продължиш надолу, ако искаш да дадеш възможност за ре-отваряне, но засега го заключваме
         return
 
-    # =========================================================
-    # --- ВТОРОСТЕПЕНЕН СТРИЙМ: РАБОТА С КЛИЕНТ (СИНЯ ЗОНА) ---
-    # =========================================================
     st.subheader("🤝 Комуникация с клиент (Външен процес)")
     
-    # ДИНАМИЧЕН ШАЛТЕР (TOGGLE)
     current_client_action = ticket.get('client_action_needed', False)
     new_client_action = st.toggle("Извънреден диспут: Очаква се действие с клиента", value=current_client_action, key=f"tgl_{ticket['id']}")
     
@@ -199,9 +192,6 @@ def show_ticket_details(ticket):
 
     st.markdown("---")
 
-    # =========================================================
-    # --- ГЛАВЕН СТРИЙМ: КОНТРОЛИНГ (ВЪТРЕШЕН ПРОЦЕС) ---
-    # =========================================================
     st.subheader("⚙️ Продължаване на процеса (Вътрешен)")
     st.write(f"Текущ мастър статус: **{current_status}**")
     
@@ -268,9 +258,6 @@ def show_ticket_details(ticket):
             st.rerun()
 
     st.markdown("---")
-    # =========================================================
-    # --- ОПЦИЯ ЗА АНУЛИРАНЕ (SOFT DELETE) ---
-    # =========================================================
     with st.expander("🚫 Опции за анулиране (Сгрешен запис)"):
         st.warning("Внимание: Анулирането ще преустанови следенето на този сигнал.")
         cancel_reason = st.text_input("Причина за анулиране (задължително):", key=f"cancel_reason_{ticket['id']}")
@@ -291,7 +278,7 @@ def show_ticket_details(ticket):
                 st.rerun()
 
 # ==========================================================
-# --- ФУНКЦИЯ ЗА РЕНДЕРИРАНЕ НА СПИСЪК ---
+# --- ФУНКЦИЯ ЗА РЕНДЕРИРАНЕ НА СПИСЪК ЗА ФИРМА ---
 # ==========================================================
 def show_company_tickets(company_code, df_complaints):
     col_title, col_btn = st.columns([4, 1])
@@ -326,11 +313,14 @@ def show_company_tickets(company_code, df_complaints):
                 
         colA, colB, colC = st.columns([3, 2, 1])
         with colA:
-            # Ако е анулиран, името е задраскано (или просто по-бледо)
             strike = "s" if status == "Сгрешен/Анулиран" else "strong"
             client_display = f"👤 <{strike}>{client}</{strike}>" + (" <span style='color:#00aaff;'>🔵 [В диспут]</span>" if has_client_action and status not in TERMINAL_STATUSES else "")
             st.markdown(client_display, unsafe_allow_html=True)
-            st.caption(f"Дата: {row.get('event_datetime', '')}")
+            
+            # Format datetime safely
+            dt_str = pd.to_datetime(row.get('event_datetime')).strftime('%d.%m.%Y %H:%M') if pd.notna(row.get('event_datetime')) else ""
+            st.caption(f"Дата: {dt_str}")
+            
         with colB:
             color = "gray" if status == "Сгрешен/Анулиран" else "red" if is_overdue else "green" if status == "Приключено" else "orange"
             st.markdown(f"Статус: <span style='color:{color}'>{status}</span>", unsafe_allow_html=True)
@@ -455,7 +445,6 @@ if page == "📊 Оперативен Дашборд":
 elif page == "📝 Регистър Оплаквания (РО)":
     st.title("📝 Управление на Сигнали (РО) - Фаза 2")
     
-    # Инициализация на сесия за отворен списък
     if 'active_company' not in st.session_state:
         st.session_state.active_company = None
         
@@ -488,7 +477,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
                     if not df_complaints.empty and 'Фирма' in df_complaints.columns:
                         comp_data = df_complaints[df_complaints['Фирма'] == comp]
                         
-                        # Не броим Приключени и Анулирани
                         unresolved = len(comp_data[~comp_data['current_status'].isin(TERMINAL_STATUSES)])
                         in_dispute = len(comp_data[(~comp_data['current_status'].isin(TERMINAL_STATUSES)) & (comp_data['client_action_needed'] == True)])
                         
@@ -511,10 +499,61 @@ elif page == "📝 Регистър Оплаквания (РО)":
                         st.session_state.active_company = comp
                         st.rerun()
 
-        # Показване на списъка извън поп-ъп, ако има избрана фирма
+        # Показване на специфичния списък за избраната фирма
         if st.session_state.active_company:
             st.markdown("---")
             show_company_tickets(st.session_state.active_company, df_complaints)
+            
+        st.markdown("---")
+        
+        # =========================================================
+        # --- ТАБЛИЦА С ПОСЛЕДНИТЕ 20 СИГНАЛА ---
+        # =========================================================
+        st.markdown("### 🕒 Последни 20 въведени сигнала")
+        
+        if not df_complaints.empty:
+            # Сортираме по ID низходящо (най-новите първи) и взимаме топ 20
+            recent_20 = df_complaints.sort_values(by="id", ascending=False).head(20)
+            
+            # Контейнерът с height=400 автоматично създава скролбар, ако съдържанието надвиши височината
+            with st.container(height=400, border=True):
+                # Заглавен ред (Хедър на таблицата)
+                h_col1, h_col2, h_col3, h_col4, h_col5 = st.columns([1.5, 2, 1, 2, 1])
+                h_col1.markdown("**Дата и Час**")
+                h_col2.markdown("**Клиент**")
+                h_col3.markdown("**Фирма**")
+                h_col4.markdown("**Статус**")
+                h_col5.markdown("**Действие**")
+                st.divider()
+                
+                for _, row in recent_20.iterrows():
+                    r_col1, r_col2, r_col3, r_col4, r_col5 = st.columns([1.5, 2, 1, 2, 1])
+                    
+                    status = row.get('current_status', 'Неопределен')
+                    
+                    # Форматиране на датата
+                    dt_str = pd.to_datetime(row.get('event_datetime')).strftime('%d.%m.%Y %H:%M') if pd.notna(row.get('event_datetime')) else ""
+                    r_col1.write(dt_str)
+                    
+                    # Задраскване, ако е анулиран
+                    client = row.get('client_name', 'Неизвестен')
+                    strike = "s" if status == "Сгрешен/Анулиран" else "span"
+                    r_col2.markdown(f"<{strike}>{client}</{strike}>", unsafe_allow_html=True)
+                    
+                    r_col3.write(row.get('Фирма', ''))
+                    
+                    # Статус с цвят
+                    color = "gray" if status == "Сгрешен/Анулиран" else "green" if status == "Приключено" else "orange"
+                    r_col4.markdown(f"<span style='color:{color}'>{status}</span>", unsafe_allow_html=True)
+                    
+                    with r_col5:
+                        # Бутонът отваря същия главен диалог за Картона
+                        if st.button("Отвори", key=f"btn_rec_{row['id']}"):
+                            show_ticket_details(row.to_dict())
+                    
+                    st.markdown("<hr style='margin: 0.2em 0; opacity: 0.2'>", unsafe_allow_html=True)
+        else:
+            st.info("Все още няма регистрирани сигнали в базата данни.")
             
     # ==========================================
     # --- ТАБ 2: ВЪВЕЖДАНЕ (ПЪРВИЧЕН КАРТОН) ---
@@ -596,7 +635,7 @@ elif page == "📝 Регистър Оплаквания (РО)":
                         }
                         
                         supabase.table("complaints").insert(new_record).execute()
-                        st.success(f"✅ Картонът е създаден успешно!")
+                        st.success(f"✅ Картонът е създаден успешно! Можете да го отворите от таблицата 'Последни 20' в таб 'Птичи поглед'.")
                         st.session_state.form_key += 1
                         st.rerun()
                     except Exception as e:
