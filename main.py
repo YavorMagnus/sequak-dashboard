@@ -72,7 +72,7 @@ if not st.session_state.logged_in:
                         st.rerun()
                     else:
                         st.error("Грешен потребител или парола!")
-    st.stop() # Спира изпълнението на кода надолу, ако не си логнат!
+    st.stop() 
 
 # ==========================================================
 # --- ГЛОБАЛНИ ФУНКЦИИ И ДАННИ ---
@@ -394,7 +394,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 3.0")
+st.sidebar.caption("Входът е защитен. Версия 3.1")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -403,37 +403,83 @@ if page == "📊 Оперативен Дашборд (ПП)":
     try:
         response_pp = supabase.table("missed_profits").select("*, companies(code)").execute()
         df_pp = pd.DataFrame(response_pp.data)
+        
         if not df_pp.empty:
             df_pp['company_code'] = df_pp['companies'].apply(lambda x: x.get('code', 'UNKNOWN').upper() if isinstance(x, dict) else 'UNKNOWN')
             df_pp['clean_machine'] = df_pp['item_tag'].apply(lambda x: str(x).split('|')[-1].strip() if '|' in str(x) else str(x))
+            df_pp['event_date'] = pd.to_datetime(df_pp['event_date'], errors='coerce')
         else:
             df_pp['company_code'] = 'UNKNOWN'
             df_pp['clean_machine'] = 'UNKNOWN'
+            df_pp['event_date'] = pd.to_datetime(datetime.date.today())
 
         st.title("📊 Оперативен Дашборд (ПП)")
-        st.markdown("---")
-        col1, col2 = st.columns([1, 2.5])
-        with col1:
-            st.subheader("Пропуснати ползи")
-            total_eur = df_pp['total_value_eur'].sum() if not df_pp.empty else 0
-            st.metric(label="Общо пропуски (EUR)", value=f"€ {total_eur:,.2f}")
-        with col2:
-            st.subheader("Топ 10 Машини (по изпусната сума)")
-            tab_all, tab_ren, tab_cim, tab_mas, tab_cmx = st.tabs(["Всички", "REN", "CIM", "MAS", "CMX"])
-            def show_top_10(df_filtered):
-                if df_filtered.empty or 'clean_machine' not in df_filtered.columns:
-                    st.write("Няма данни.")
-                    return
-                top_10 = df_filtered.groupby('clean_machine')['total_value_eur'].sum().nlargest(10).reset_index()
-                top_10.columns = ['Машина', 'Изпусната сума (€)']
-                styled_df = top_10.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFD700'})
-                st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        
+        if df_pp.empty:
+            st.info("В момента няма заредени данни за пропуснати ползи.")
+        else:
+            # --- ФИЛТРИ ---
+            min_date = df_pp['event_date'].min().date() if pd.notna(df_pp['event_date'].min()) else datetime.date.today()
+            max_date = df_pp['event_date'].max().date() if pd.notna(df_pp['event_date'].max()) else datetime.date.today()
+            
+            st.markdown("### 🔍 Избор на период")
+            col_f1, col_f2 = st.columns([1, 2])
+            with col_f1:
+                date_range = st.date_input("Покажи данни за времето от-до:", value=(min_date, max_date), min_value=min_date, max_value=max_date)
+            
+            if len(date_range) == 2:
+                start_date, end_date = date_range
+                df_filtered = df_pp[(df_pp['event_date'].dt.date >= start_date) & (df_pp['event_date'].dt.date <= end_date)].copy()
+            else:
+                df_filtered = df_pp.copy()
 
-            with tab_all: show_top_10(df_pp)
-            with tab_ren: show_top_10(df_pp[df_pp['company_code'] == 'REN'])
-            with tab_cim: show_top_10(df_pp[df_pp['company_code'].isin(['CIM', 'RCD'])])
-            with tab_mas: show_top_10(df_pp[df_pp['company_code'] == 'MAS'])
-            with tab_cmx: show_top_10(df_pp[df_pp['company_code'] == 'CMX'])
+            st.markdown("---")
+            
+            # --- KPI МЕТРИКИ ---
+            total_eur = df_filtered['total_value_eur'].sum() if not df_filtered.empty else 0
+            total_count = len(df_filtered)
+            avg_eur = total_eur / total_count if total_count > 0 else 0
+
+            st.markdown('<div class="analytic-card">', unsafe_allow_html=True)
+            kpi1, kpi2, kpi3 = st.columns(3)
+            kpi1.metric("Общо пропуски (EUR)", f"€ {total_eur:,.2f}")
+            kpi2.metric("Брой изпуснати сделки", f"{total_count} бр.")
+            kpi3.metric("Средна стойност на пропуск", f"€ {avg_eur:,.2f}")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            # --- ГРАФИКИ И ТАБЛИЦИ ---
+            col_ch1, col_ch2 = st.columns([1.5, 1])
+            
+            with col_ch1:
+                st.subheader("📈 Пропуски по Фирми (EUR)")
+                if not df_filtered.empty:
+                    company_group = df_filtered.groupby('company_code')['total_value_eur'].sum().reset_index()
+                    company_group = company_group.sort_values('total_value_eur', ascending=False)
+                    fig = px.bar(company_group, x='company_code', y='total_value_eur', 
+                                 labels={'company_code': 'Фирма', 'total_value_eur': 'Стойност (€)'},
+                                 color='company_code', color_discrete_sequence=px.colors.sequential.Plasma)
+                    fig.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)', font_color='white', showlegend=False)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.write("Няма данни за избрания период.")
+
+            with col_ch2:
+                st.subheader("🏆 Топ 10 Машини")
+                tab_all, tab_ren, tab_cim, tab_mas, tab_cmx = st.tabs(["Всички", "REN", "CIM", "MAS", "CMX"])
+                def show_top_10(df_to_show):
+                    if df_to_show.empty or 'clean_machine' not in df_to_show.columns:
+                        st.write("Няма данни.")
+                        return
+                    top_10 = df_to_show.groupby('clean_machine')['total_value_eur'].sum().nlargest(10).reset_index()
+                    top_10.columns = ['Машина', 'Изпусната сума (€)']
+                    styled_df = top_10.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFD700'})
+                    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+
+                with tab_all: show_top_10(df_filtered)
+                with tab_ren: show_top_10(df_filtered[df_filtered['company_code'] == 'REN'])
+                with tab_cim: show_top_10(df_filtered[df_filtered['company_code'].isin(['CIM', 'RCD'])])
+                with tab_mas: show_top_10(df_filtered[df_filtered['company_code'] == 'MAS'])
+                with tab_cmx: show_top_10(df_filtered[df_filtered['company_code'] == 'CMX'])
 
     except Exception as e:
         st.error(f"Възникна грешка: {e}")
