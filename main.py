@@ -107,10 +107,14 @@ def get_related_signals(ticket, df_complaints):
         
     t_date = pd.to_datetime(ticket.get('event_datetime'), errors='coerce')
     if pd.isna(t_date): return pd.DataFrame()
+    if t_date.tzinfo is not None: t_date = t_date.replace(tzinfo=None)
     
     mask = (df_complaints['id'] != ticket['id'])
     
-    date_diff = (pd.to_datetime(df_complaints['event_datetime'], errors='coerce') - t_date).abs()
+    comp_dates = pd.to_datetime(df_complaints['event_datetime'], errors='coerce')
+    if comp_dates.dt.tz is not None: comp_dates = comp_dates.dt.tz_localize(None)
+    
+    date_diff = (comp_dates - t_date).abs()
     mask &= (date_diff.dt.days <= 30)
     
     match_cond = pd.Series(False, index=df_complaints.index)
@@ -383,7 +387,7 @@ def show_company_tickets(company_code, df_complaints):
 st.sidebar.title("🏗️ SequaK Меню")
 page = st.sidebar.radio("Изберете модул:", ["📊 Оперативен Дашборд (ПП)", "📝 Регистър Оплаквания (РО)", "📈 Анализи и Справки (РО)"])
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 2.1")
+st.sidebar.caption("Входът е защитен. Версия 2.2")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -702,14 +706,18 @@ elif page == "📈 Анализи и Справки (РО)":
         res_hist = supabase.table("complaint_history").select("*").execute()
         df_hist = pd.DataFrame(res_hist.data)
         
+        # ЗАЩИТА НА ДАТИТЕ: Глобално премахване на Timezone, за да не гърми сравнението
         if not df_comp.empty:
             df_comp['Фирма'] = df_comp['companies'].apply(lambda x: x.get('code', 'UNKNOWN') if isinstance(x, dict) else 'UNKNOWN')
             df_comp['event_datetime'] = pd.to_datetime(df_comp['event_datetime'], errors='coerce')
+            if df_comp['event_datetime'].dt.tz is not None:
+                df_comp['event_datetime'] = df_comp['event_datetime'].dt.tz_localize(None)
             
         if not df_hist.empty:
             df_hist['created_at'] = pd.to_datetime(df_hist['created_at'], errors='coerce')
+            if df_hist['created_at'].dt.tz is not None:
+                df_hist['created_at'] = df_hist['created_at'].dt.tz_localize(None)
         else:
-            # Защита срещу KeyError, ако историята е напълно празна
             df_hist = pd.DataFrame(columns=['id', 'complaint_id', 'action_type', 'action_details', 'assigned_to', 'deadline_date', 'created_by', 'created_at'])
             
     except Exception as e:
@@ -717,6 +725,7 @@ elif page == "📈 Анализи и Справки (РО)":
         df_comp = pd.DataFrame()
         df_hist = pd.DataFrame()
 
+    # ПОПРАВКАТА: Проверяваме САМО дали има данни в главната таблица. Историята може и да е празна.
     if df_comp.empty:
         st.info("⚠️ Няма достатъчно данни в системата за генериране на справки.")
     else:
@@ -790,8 +799,8 @@ elif page == "📈 Анализи и Справки (РО)":
             closed_history = df_hist[df_hist['action_type'] == "Сигналът е приключен"].copy()
             closed_merged = pd.merge(df_active[['id', 'current_status']], closed_history[['complaint_id', 'created_at']], left_on='id', right_on='complaint_id', how='inner')
             
-            mask_current_closed = (closed_merged['created_at'] >= pd.to_datetime(start_current, utc=True)) & (closed_merged['created_at'] <= pd.to_datetime(end_current, utc=True))
-            mask_prev_closed = (closed_merged['created_at'] >= pd.to_datetime(start_prev, utc=True)) & (closed_merged['created_at'] <= pd.to_datetime(end_prev, utc=True))
+            mask_current_closed = (closed_merged['created_at'] >= start_current) & (closed_merged['created_at'] <= end_current)
+            mask_prev_closed = (closed_merged['created_at'] >= start_prev) & (closed_merged['created_at'] <= end_prev)
             
             count_closed_current = len(closed_merged[mask_current_closed])
             count_closed_prev = len(closed_merged[mask_prev_closed])
@@ -801,7 +810,7 @@ elif page == "📈 Анализи и Справки (РО)":
             if selected_company != "Всички фирми (Холдинг)":
                 holding_active = df_comp[df_comp['current_status'] != 'Сгрешен/Анулиран']
                 holding_closed_merged = pd.merge(holding_active[['id']], closed_history[['complaint_id', 'created_at']], left_on='id', right_on='complaint_id', how='inner')
-                total_holding_closed = len(holding_closed_merged[(holding_closed_merged['created_at'] >= pd.to_datetime(start_current, utc=True)) & (holding_closed_merged['created_at'] <= pd.to_datetime(end_current, utc=True))])
+                total_holding_closed = len(holding_closed_merged[(holding_closed_merged['created_at'] >= start_current) & (holding_closed_merged['created_at'] <= end_current)])
                 
                 if total_holding_closed > 0:
                     pct = (count_closed_current / total_holding_closed) * 100
@@ -810,10 +819,10 @@ elif page == "📈 Анализи и Справки (РО)":
             dispute_history = df_hist[df_hist['action_type'] == "Диспут с клиент: Активиран"].copy()
             dispute_merged = pd.merge(df_active[['id']], dispute_history[['complaint_id', 'created_at']], left_on='id', right_on='complaint_id', how='inner')
             
-            current_disputes_ids = dispute_merged[(dispute_merged['created_at'] >= pd.to_datetime(start_current, utc=True)) & (dispute_merged['created_at'] <= pd.to_datetime(end_current, utc=True))]['complaint_id'].unique()
+            current_disputes_ids = dispute_merged[(dispute_merged['created_at'] >= start_current) & (dispute_merged['created_at'] <= end_current)]['complaint_id'].unique()
             count_disputes_current = len(current_disputes_ids)
             
-            prev_disputes_ids = dispute_merged[(dispute_merged['created_at'] >= pd.to_datetime(start_prev, utc=True)) & (dispute_merged['created_at'] <= pd.to_datetime(end_prev, utc=True))]['complaint_id'].unique()
+            prev_disputes_ids = dispute_merged[(dispute_merged['created_at'] >= start_prev) & (dispute_merged['created_at'] <= end_prev)]['complaint_id'].unique()
             delta_disputes = count_disputes_current - len(prev_disputes_ids)
             
             pct_disputes = (count_disputes_current / count_in_current * 100) if count_in_current > 0 else 0
