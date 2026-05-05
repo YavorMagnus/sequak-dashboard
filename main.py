@@ -27,7 +27,7 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] { background-color: #222222; border-radius: 4px; padding: 10px 20px; color: #FFFFFF; }
     .stTabs [aria-selected="true"] { background-color: #FFD700 !important; color: #111111 !important; font-weight: bold; }
     
-    .history-card { background-color: #333333; padding: 10px; border-left: 3px solid #FFD700; margin-bottom: 10px; border-radius: 4px; }
+    .history-card { background-color: #333333; padding: 12px; border-left: 4px solid #FFD700; margin-bottom: 12px; border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
     .client-stream { background-color: #0d2136; padding: 20px; border-radius: 8px; border-left: 5px solid #00aaff; margin-top: 10px; box-shadow: 0 2px 4px rgba(0,170,255,0.1); }
     .client-stream h4 { color: #00aaff; margin-top: 0; }
     .analytic-card { background-color: #1e1e1e; padding: 20px; border-radius: 8px; border-top: 3px solid #FFD700; margin-bottom: 20px; }
@@ -213,12 +213,17 @@ def show_ticket_details(ticket, df_complaints_param):
         else:
             for record in history_data:
                 created_at_fmt = pd.to_datetime(record['created_at']).strftime('%d.%m.%Y %H:%M')
-                deadline_str = f" | Срок: {record['deadline_date']}" if record.get('deadline_date') else ""
+                deadline_str = f" | Срок: <span style='color:#ff4b4b;'>{record['deadline_date']}</span>" if record.get('deadline_date') else ""
                 assigned_str = f" | Към: {record['assigned_to']}" if record.get('assigned_to') else ""
+                author = record.get('created_by', 'Системата')
+                
+                # ТУК Е МАГИЯТА ЗА НОВИТЕ РЕДОВЕ: Заменяме " | " с HTML нов ред
+                details_formatted = record.get('action_details', '').replace(' | ', '<br>🔹 ')
+                
                 st.markdown(f"""
                 <div class="history-card">
-                    <strong>{created_at_fmt} - {record['action_type']}</strong> {assigned_str} {deadline_str}<br>
-                    <em>{record.get('action_details', '')}</em>
+                    <strong>{created_at_fmt} - {record['action_type']}</strong> <span style="color: #00aaff; font-size: 0.9em;">(от: {author})</span> {assigned_str} {deadline_str}
+                    <div style="margin-top: 8px; color: #eeeeee; padding-left: 5px;">{details_formatted}</div>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -336,7 +341,6 @@ def show_ticket_details(ticket, df_complaints_param):
                     else:
                         next_status = "Чака проверка" if new_rec == "Проверка (поле)" else "Чака приключване"
                         
-                        # Интелигентно формиране на текста за базата данни, за да е четим
                         conc_text = f"Заключение: {new_conc}"
                         if conc_comment: conc_text += f" [{conc_comment}]"
                             
@@ -421,12 +425,15 @@ def show_ticket_details(ticket, df_complaints_param):
         if history_data:
             for idx, rec in enumerate(history_data):
                 dt_fmt = pd.to_datetime(rec['created_at']).strftime('%d.%m.%Y %H:%M')
+                author = rec.get('created_by', 'Системата')
+                details_formatted = rec.get('action_details', '').replace(' | ', '<br>🔹 ')
+                
                 col_data_h, col_chk_h = st.columns([11, 1])
                 with col_data_h:
                     st.markdown(f"""
                     <div style="background-color: #2a2a2a; padding: 10px; border-left: 3px solid #FFD700; margin-bottom: 5px; border-radius: 4px;">
-                        <strong>{dt_fmt} - {rec['action_type']}</strong><br>
-                        <span style="color: #cccccc;">{rec.get('action_details', '')}</span>
+                        <strong>{dt_fmt} - {rec['action_type']}</strong> <span style="color: #00aaff; font-size: 0.9em;">(от: {author})</span><br>
+                        <span style="color: #cccccc;">{details_formatted}</span>
                     </div>
                     """, unsafe_allow_html=True)
                 with col_chk_h:
@@ -483,11 +490,14 @@ def show_ticket_details(ticket, df_complaints_param):
             html_content += """<h4 style="color: #111111; border-bottom: 2px solid #cccccc; padding-bottom: 5px; margin-top: 20px;">Хронология на действията</h4>"""
             for rec in selected_history:
                 dt_fmt = pd.to_datetime(rec['created_at']).strftime('%d.%m.%Y %H:%M')
+                author = rec.get('created_by', 'Системата')
+                details_html_email = rec.get('action_details', '').replace(' | ', '<br>🔹 ')
+                
                 html_content += f"""
                 <div style="margin-bottom: 10px; padding-left: 10px; border-left: 3px solid #FFD700; font-size: 13px;">
-                <span style="color: #777777; font-size: 11px;">{dt_fmt} (от: {rec.get('created_by', '')})</span><br>
+                <span style="color: #777777; font-size: 11px;">{dt_fmt} (от: <b>{author}</b>)</span><br>
                 <strong>{rec['action_type']}</strong><br>
-                <span style="color: #444444;">{rec.get('action_details', '')}</span>
+                <span style="color: #444444;">{details_html_email}</span>
                 </div>
                 """
                 
@@ -590,7 +600,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 5.6 (Full Comment Fields)")
+st.sidebar.caption("Входът е защитен. Версия 5.7 (History UI & Audit)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -657,7 +667,7 @@ if page == "📊 ПП - Дашборд":
             col_ch1, col_ch2 = st.columns([1.5, 1])
             
             with col_ch1:
-                st.subheader("📑 Анали по Статус / Фирми")
+                st.subheader("📑 Анализ по Статус / Фирми")
                 tab_table, tab_chart = st.tabs(["📊 Детайли по Статус", "📈 Обща Графика"])
                 
                 with tab_table:
@@ -1140,7 +1150,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
                         inserted = supabase.table("complaints").insert(new_record).execute()
                         st.session_state.form_key += 1
                         
-                        # --- МАГИЯТА ЗА АВТОМАТИЧНО ОТВАРЯНЕ НА НОВИЯ КАРТОН ---
                         if inserted.data:
                             st.session_state.auto_open_ticket_id = inserted.data[0]['id']
                             
