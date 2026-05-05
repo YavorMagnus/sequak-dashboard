@@ -50,6 +50,20 @@ st.markdown("""
     .kanban-title { font-size: 1.1em; font-weight: bold; margin-bottom: 5px; color: #ffffff; }
     .kanban-meta { font-size: 0.85em; color: #aaaaaa; margin-bottom: 8px; }
     .kanban-detail { font-size: 0.9em; margin-bottom: 5px; line-height: 1.3; color: #eeeeee; }
+
+    /* Стилизиране на сортиращите бутони в таблицата */
+    .sort-btn-container button {
+        background: none !important;
+        border: none !important;
+        color: #FFD700 !important;
+        font-weight: bold !important;
+        padding: 0 !important;
+        box-shadow: none !important;
+        display: inline-block;
+    }
+    .sort-btn-container button:hover {
+        text-decoration: underline !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -70,7 +84,7 @@ if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_role = None
     st.session_state.username = None
-    st.session_state.alerts_dismissed = False # Флаг за пред-началния екран
+    st.session_state.alerts_dismissed = False
 
 if not st.session_state.logged_in:
     st.markdown("<br><br>", unsafe_allow_html=True)
@@ -181,10 +195,8 @@ def get_related_signals(ticket, df_complaints):
 # ==========================================================
 # --- ПРЕД-НАЧАЛЕН ЕКРАН (АЛАРМИ ЗА АДМИН) ---
 # ==========================================================
-# Този блок се изпълнява преди да се зареди страничното меню, ако има просрочия
 if st.session_state.user_role == "Администратор" and not st.session_state.alerts_dismissed:
     try:
-        # Изтегляме само активните сигнали
         res_active = supabase.table("complaints").select("*, companies(code)").not_.in_("current_status", TERMINAL_STATUSES).execute()
         df_active_alerts = pd.DataFrame(res_active.data)
         
@@ -211,7 +223,7 @@ if st.session_state.user_role == "Администратор" and not st.session
                 with col3:
                     if st.button("Отвори Картона", key=f"alert_btn_{tkt['id']}", use_container_width=True):
                         st.session_state.auto_open_ticket_id = tkt['id']
-                        st.session_state.alerts_dismissed = True # Автоматично преминаваме, ако отворим картон
+                        st.session_state.alerts_dismissed = True
                         st.rerun()
                 st.divider()
                 
@@ -220,12 +232,10 @@ if st.session_state.user_role == "Администратор" and not st.session
                 st.session_state.alerts_dismissed = True
                 st.rerun()
             
-            st.stop() # Спираме изпълнението на останалия код, докато не се кликне бутона
+            st.stop()
         else:
-            # Ако няма просрочени, автоматично пропускаме екрана
             st.session_state.alerts_dismissed = True
     except Exception as e:
-        # В случай на грешка с базата, пропускаме пред-началния екран за да не блокираме работата
         st.session_state.alerts_dismissed = True
 
 # ==========================================================
@@ -450,7 +460,6 @@ def show_ticket_details(ticket, df_complaints_param):
         st.markdown("Изберете кои елементи да присъстват в мейла чрез чекбоксовете вдясно. Всичко се обновява на живо.")
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # 1. Секция: Основна информация
         col_data_1, col_chk_1 = st.columns([11, 1])
         with col_data_1:
             st.markdown(f"**Сигнал от: {ticket.get('client_name', 'Неизвестен')}**")
@@ -468,7 +477,6 @@ def show_ticket_details(ticket, df_complaints_param):
             
         st.markdown("---")
 
-        # 2. Секция: Описание
         col_data_2, col_chk_2 = st.columns([11, 1])
         with col_data_2:
             st.info(f"**Описание:** {ticket.get('description', '')}")
@@ -478,14 +486,12 @@ def show_ticket_details(ticket, df_complaints_param):
             
         st.markdown("---")
 
-        # 3. Секция: Хронология (Динамична)
         st.markdown("📝 **Хронология на действията**")
         selected_history = []
         if history_data:
             for idx, rec in enumerate(history_data):
                 dt_fmt = pd.to_datetime(rec['created_at']).strftime('%d.%m.%Y %H:%M')
                 author = rec.get('created_by') or 'Системата'
-                
                 raw_details = str(rec.get('action_details') or "")
                 details_formatted = raw_details.replace(' | ', '<br>🔹 ')
                 
@@ -505,7 +511,6 @@ def show_ticket_details(ticket, df_complaints_param):
         else:
             st.write("Няма действия в хронологията.")
             
-        # HTML МЕЙЛ
         st.markdown("### 👁️ Предварителен преглед на мейла")
         st.caption("👇 **МАРКИРАЙ С МИШКАТА рамката по-долу, натисни Ctrl+C и пейстни (Ctrl+V) директно в Outlook.**")
         
@@ -645,8 +650,7 @@ def show_company_tickets(company_code, df_complaints):
 # ==========================================================
 st.sidebar.title("🏗️ SequaK Меню")
 
-# Всички виждат трите менюта (РО вече е общодостъпно)
-available_pages = ["📊 ПП - Дашборд", "📝 Регистър Оплаквания (РО)", "📈 Анализи и Справки (РО)"]
+available_pages = ["📊 ПП - Дашборд", "📝 Сигнали и оплаквания", "📈 Анализи и Справки (РО)"]
 page = st.sidebar.radio("Изберете модул:", available_pages)
 
 st.sidebar.markdown("---")
@@ -658,7 +662,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 6.0 (Kanban + Alerts)")
+st.sidebar.caption("Входът е защитен. Версия 6.1 (UI Sort Updates)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -881,7 +885,7 @@ if page == "📊 ПП - Дашборд":
     except Exception as e:
         st.error(f"Възникна грешка при зареждане на таблото: {e}")
 
-    # Само Администратор може да внася данни
+    # Внос
     if st.session_state.user_role == "Администратор":
         st.markdown("---")
         st.header("📥 Внос на данни (Пропуснати ползи)")
@@ -981,11 +985,22 @@ if page == "📊 ПП - Дашборд":
 # ==========================================================
 # --- СТРАНИЦА 2: РЕГИСТЪР ОПЛАКВАНИЯ (РО) ---
 # ==========================================================
-elif page == "📝 Регистър Оплаквания (РО)":
-    st.title("📝 Управление на Сигнали (РО) - Фаза 4")
+elif page == "📝 Сигнали и оплаквания":
+    st.title("📝 Сигнали и оплаквания")
     
     if 'active_company' not in st.session_state:
         st.session_state.active_company = None
+        
+    if 'ro_sort_col' not in st.session_state:
+        st.session_state.ro_sort_col = 'event_datetime'
+        st.session_state.ro_sort_asc = False
+
+    def handle_sort(column_name):
+        if st.session_state.ro_sort_col == column_name:
+            st.session_state.ro_sort_asc = not st.session_state.ro_sort_asc
+        else:
+            st.session_state.ro_sort_col = column_name
+            st.session_state.ro_sort_asc = True
         
     try:
         res = supabase.table("complaints").select("*, companies(code)").limit(100000).execute()
@@ -993,19 +1008,133 @@ elif page == "📝 Регистър Оплаквания (РО)":
         if not df_complaints.empty:
             df_complaints['Фирма'] = df_complaints['companies'].apply(lambda x: x.get('code', '') if isinstance(x, dict) else '')
             
-        # За Канбана изтегляме и хронологията, за да вземем последните препоръки
         hist_res = supabase.table("complaint_history").select("complaint_id, assigned_to, deadline_date, action_details, action_type").order("created_at", desc=True).limit(100000).execute()
         df_hist_full = pd.DataFrame(hist_res.data)
         
+        # Интелигентен речник за Отговорници и Препоръки (Използва се и за Канбан, и за Таблицата)
+        latest_hist_dict = {}
+        if not df_hist_full.empty and not df_complaints.empty:
+            for cid in df_complaints['id'].unique():
+                comp_hist = df_hist_full[df_hist_full['complaint_id'] == cid]
+                if not comp_hist.empty:
+                    action_steps = comp_hist[comp_hist['action_type'] == 'Назначена стъпка']
+                    if not action_steps.empty:
+                        last_action = action_steps.iloc[0]
+                        action_str = str(last_action.get('action_details', ''))
+                        rec_match = re.search(r"Препоръка:\s*(.*?)(?:\s*\||$)", action_str)
+                        rec_text = rec_match.group(1).strip() if rec_match else "Няма инфо"
+                        
+                        latest_hist_dict[cid] = {
+                            'assignee': last_action.get('assigned_to') or "Не е посочен",
+                            'recommendation': rec_text
+                        }
+                    else:
+                        latest_hist_dict[cid] = {'assignee': "Не е посочен", 'recommendation': "Няма назначена стъпка"}
+                else:
+                    latest_hist_dict[cid] = {'assignee': "Не е посочен", 'recommendation': "Няма история"}
+
     except Exception as e:
         st.error(f"Грешка при връзка с DB: {e}")
         df_complaints = pd.DataFrame()
         df_hist_full = pd.DataFrame()
+        latest_hist_dict = {}
         
     tab_list, tab_kanban, tab_new = st.tabs(["👁️ Птичи поглед (Дашборд)", "📋 Канбан дъска", "➕ Въвеждане на нов сигнал"])
     
     with tab_list:
-        st.markdown("### Активно следене на процеси по фирми")
+        # --- СЕКЦИЯ 1: ТЪРСАЧКА И ПОСЛЕДНИ СИГНАЛИ (СМЕНЕНИ МЕСТА) ---
+        st.markdown("### 🔍 Търсачка и Списък")
+        search_query = st.text_input("Търсене по: Име, Телефон, ЕИК, Имейл, Договор, Машина или Аудио запис", placeholder="Въведете текст и натиснете Enter...", key="global_search").strip()
+        
+        if not df_complaints.empty:
+            df_to_display = df_complaints.copy()
+            # Добавяме колона за отговорник, за да можем да сортираме по нея
+            df_to_display['assignee'] = df_to_display['id'].map(lambda x: latest_hist_dict.get(x, {}).get('assignee', 'Не е посочен'))
+            
+            if search_query:
+                q = search_query.lower()
+                search_cols = ['client_name', 'client_phone', 'client_email', 'client_eik', 'contract_number', 'machines', 'call_number']
+                mask = False
+                for col in search_cols:
+                    if col in df_to_display.columns:
+                        mask = mask | df_to_display[col].fillna('').astype(str).str.lower().str.contains(q)
+                display_df = df_to_display[mask]
+                st.markdown(f"**Намерени резултати:** {len(display_df)}")
+            else:
+                st.markdown("#### 🕒 Последни 50 въведени сигнала")
+                display_df = df_to_display.sort_values(by="id", ascending=False).head(50)
+            
+            # Прилагаме избраното сортиране върху крайния DataFrame
+            if st.session_state.ro_sort_col in display_df.columns:
+                display_df = display_df.sort_values(by=st.session_state.ro_sort_col, ascending=st.session_state.ro_sort_asc)
+
+            with st.container(height=500, border=True):
+                # Използваме markdown за да създадем кастъм "бутони-линкове", които изглеждат като заглавия
+                h_col1, h_col2, h_col3, h_col4, h_col5, h_col6 = st.columns([1.5, 2, 1, 1.5, 1.5, 1])
+                
+                with h_col1:
+                    arrow = " ↑" if st.session_state.ro_sort_col == 'event_datetime' and st.session_state.ro_sort_asc else " ↓" if st.session_state.ro_sort_col == 'event_datetime' else ""
+                    st.markdown(f'<div class="sort-btn-container">', unsafe_allow_html=True)
+                    st.button(f"Дата и Час{arrow}", key="btn_sort_date", on_click=handle_sort, args=('event_datetime',), use_container_width=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                with h_col2:
+                    arrow = " ↑" if st.session_state.ro_sort_col == 'client_name' and st.session_state.ro_sort_asc else " ↓" if st.session_state.ro_sort_col == 'client_name' else ""
+                    st.markdown(f'<div class="sort-btn-container">', unsafe_allow_html=True)
+                    st.button(f"Клиент{arrow}", key="btn_sort_client", on_click=handle_sort, args=('client_name',), use_container_width=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                with h_col3:
+                    arrow = " ↑" if st.session_state.ro_sort_col == 'Фирма' and st.session_state.ro_sort_asc else " ↓" if st.session_state.ro_sort_col == 'Фирма' else ""
+                    st.markdown(f'<div class="sort-btn-container">', unsafe_allow_html=True)
+                    st.button(f"Фирма{arrow}", key="btn_sort_comp", on_click=handle_sort, args=('Фирма',), use_container_width=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                with h_col4:
+                    arrow = " ↑" if st.session_state.ro_sort_col == 'current_status' and st.session_state.ro_sort_asc else " ↓" if st.session_state.ro_sort_col == 'current_status' else ""
+                    st.markdown(f'<div class="sort-btn-container">', unsafe_allow_html=True)
+                    st.button(f"Статус{arrow}", key="btn_sort_status", on_click=handle_sort, args=('current_status',), use_container_width=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                with h_col5:
+                    arrow = " ↑" if st.session_state.ro_sort_col == 'assignee' and st.session_state.ro_sort_asc else " ↓" if st.session_state.ro_sort_col == 'assignee' else ""
+                    st.markdown(f'<div class="sort-btn-container">', unsafe_allow_html=True)
+                    st.button(f"Отговорник{arrow}", key="btn_sort_assignee", on_click=handle_sort, args=('assignee',), use_container_width=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                with h_col6:
+                    st.markdown("**Действие**")
+                st.divider()
+                
+                if display_df.empty:
+                    st.write("Няма намерени записи, отговарящи на критериите.")
+                else:
+                    for _, row in display_df.iterrows():
+                        r_col1, r_col2, r_col3, r_col4, r_col5, r_col6 = st.columns([1.5, 2, 1, 1.5, 1.5, 1])
+                        status = row.get('current_status', 'Неопределен')
+                        dt_str = pd.to_datetime(row.get('event_datetime')).strftime('%d.%m.%Y %H:%M') if pd.notna(row.get('event_datetime')) else ""
+                        r_col1.write(dt_str)
+                        
+                        has_dup = not get_related_signals(row, df_complaints).empty
+                        dup_badge = " <span style='color:#ff4b4b;' title='Има свързани сигнали (30 дни)'>🚨</span>" if has_dup else ""
+                        client = row.get('client_name', 'Неизвестен')
+                        strike = "s" if status == "Сгрешен/Анулиран" else "span"
+                        
+                        r_col2.markdown(f"<{strike}>{client}</{strike}>{dup_badge}", unsafe_allow_html=True)
+                        r_col3.write(row.get('Фирма', ''))
+                        
+                        color = "gray" if status == "Сгрешен/Анулиран" else "green" if status == "Приключено" else "orange"
+                        r_col4.markdown(f"<span style='color:{color}'><{strike}>{status}</{strike}></span>", unsafe_allow_html=True)
+                        
+                        assignee_val = row.get('assignee', 'Не е посочен')
+                        r_col5.markdown(f"<{strike}>{assignee_val}</{strike}>", unsafe_allow_html=True)
+                        
+                        with r_col6:
+                            if st.button("Отвори", key=f"btn_rec_{row['id']}"):
+                                show_ticket_details(row.to_dict(), df_complaints)
+                        st.markdown("<hr style='margin: 0.2em 0; opacity: 0.2'>", unsafe_allow_html=True)
+        else:
+            st.info("Все още няма регистрирани сигнали в базата данни.")
+
+        st.markdown("<br><br>", unsafe_allow_html=True)
+
+        # --- СЕКЦИЯ 2: ПТИЧИ ПОГЛЕД ПО ФИРМИ (ОТИВА НАДОЛУ) ---
+        st.markdown("### Птичи поглед по фирми")
         st.caption("Кликнете върху бутона под дадена фирма, за да видите детайли и просрочия.")
 
         NUM_COLS_PER_ROW = 4
@@ -1043,58 +1172,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
         if st.session_state.active_company:
             st.markdown("---")
             show_company_tickets(st.session_state.active_company, df_complaints)
-            
-        st.markdown("---")
-        st.markdown("### 🔍 Търсачка")
-        search_query = st.text_input("Търсене по: Име, Телефон, ЕИК, Имейл, Договор, Машина или Аудио запис", placeholder="Въведете текст и натиснете Enter...", key="global_search").strip()
-        
-        if not df_complaints.empty:
-            if search_query:
-                q = search_query.lower()
-                search_cols = ['client_name', 'client_phone', 'client_email', 'client_eik', 'contract_number', 'machines', 'call_number']
-                mask = False
-                for col in search_cols:
-                    if col in df_complaints.columns:
-                        mask = mask | df_complaints[col].fillna('').astype(str).str.lower().str.contains(q)
-                display_df = df_complaints[mask].sort_values(by="event_datetime", ascending=False)
-                st.markdown(f"**Намерени резултати:** {len(display_df)}")
-            else:
-                st.markdown("#### 🕒 Последни 20 въведени сигнала")
-                display_df = df_complaints.sort_values(by="id", ascending=False).head(20)
-            
-            with st.container(height=400, border=True):
-                h_col1, h_col2, h_col3, h_col4, h_col5 = st.columns([1.5, 2, 1, 2, 1])
-                h_col1.markdown("**Дата и Час**")
-                h_col2.markdown("**Клиент**")
-                h_col3.markdown("**Фирма**")
-                h_col4.markdown("**Статус**")
-                h_col5.markdown("**Действие**")
-                st.divider()
-                
-                if display_df.empty:
-                    st.write("Няма намерени записи, отговарящи на критериите.")
-                else:
-                    for _, row in display_df.iterrows():
-                        r_col1, r_col2, r_col3, r_col4, r_col5 = st.columns([1.5, 2, 1, 2, 1])
-                        status = row.get('current_status', 'Неопределен')
-                        dt_str = pd.to_datetime(row.get('event_datetime')).strftime('%d.%m.%Y %H:%M') if pd.notna(row.get('event_datetime')) else ""
-                        r_col1.write(dt_str)
-                        
-                        has_dup = not get_related_signals(row, df_complaints).empty
-                        dup_badge = " <span style='color:#ff4b4b;' title='Има свързани сигнали (30 дни)'>🚨</span>" if has_dup else ""
-                        client = row.get('client_name', 'Неизвестен')
-                        strike = "s" if status == "Сгрешен/Анулиран" else "span"
-                        r_col2.markdown(f"<{strike}>{client}</{strike}>{dup_badge}", unsafe_allow_html=True)
-                        r_col3.write(row.get('Фирма', ''))
-                        color = "gray" if status == "Сгрешен/Анулиран" else "green" if status == "Приключено" else "orange"
-                        r_col4.markdown(f"<span style='color:{color}'>{status}</span>", unsafe_allow_html=True)
-                        
-                        with r_col5:
-                            if st.button("Отвори", key=f"btn_rec_{row['id']}"):
-                                show_ticket_details(row.to_dict(), df_complaints)
-                        st.markdown("<hr style='margin: 0.2em 0; opacity: 0.2'>", unsafe_allow_html=True)
-        else:
-            st.info("Все още няма регистрирани сигнали в базата данни.")
 
     # --- ТАБ КАНБАН ДЪСКА ---
     with tab_kanban:
@@ -1108,31 +1185,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
             df_kb = df_complaints[~df_complaints['current_status'].isin(TERMINAL_STATUSES)].copy()
             if kb_comp_filter != "Всички":
                 df_kb = df_kb[df_kb['Фирма'] == kb_comp_filter]
-                
-            # Подготовка на речник с последната история за бързо търсене
-            latest_hist_dict = {}
-            if not df_hist_full.empty:
-                for cid in df_kb['id'].unique():
-                    comp_hist = df_hist_full[df_hist_full['complaint_id'] == cid]
-                    if not comp_hist.empty:
-                        last_record = comp_hist.iloc[0] # Тъй като вече е сортирано desc по created_at
-                        # Търсим конкретно "Назначена стъпка", за да хванем препоръката
-                        action_steps = comp_hist[comp_hist['action_type'] == 'Назначена стъпка']
-                        if not action_steps.empty:
-                            last_action = action_steps.iloc[0]
-                            # Опитваме да извадим само препоръката от стринга
-                            action_str = str(last_action.get('action_details', ''))
-                            rec_match = re.search(r"Препоръка:\s*(.*?)(?:\s*\||$)", action_str)
-                            rec_text = rec_match.group(1).strip() if rec_match else "Няма инфо"
-                            
-                            latest_hist_dict[cid] = {
-                                'assignee': last_action.get('assigned_to') or "Не е посочен",
-                                'recommendation': rec_text
-                            }
-                        else:
-                            latest_hist_dict[cid] = {'assignee': "Не е посочен", 'recommendation': "Няма назначена стъпка"}
-                    else:
-                        latest_hist_dict[cid] = {'assignee': "Не е посочен", 'recommendation': "Няма история"}
 
             k_col1, k_col2, k_col3 = st.columns(3)
             
@@ -1151,7 +1203,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
                         
                 in_dispute = tkt.get('client_action_needed', False)
                 
-                # Вземане на допълнителните данни
                 meta_info = latest_hist_dict.get(cid, {'assignee': 'Не е посочен', 'recommendation': 'Няма'})
                 assignee = meta_info['assignee']
                 rec = meta_info['recommendation']
@@ -1175,7 +1226,6 @@ elif page == "📝 Регистър Оплаквания (РО)":
                     if st.button("Отвори", key=f"kb_btn_{cid}", use_container_width=True):
                         show_ticket_details(tkt, df_complaints)
 
-            # Филтриране по колони
             df_col1 = df_kb[df_kb['current_status'] == "Чака заключение и препоръка"]
             df_col2 = df_kb[df_kb['current_status'] == "Чака проверка"]
             df_col3 = df_kb[df_kb['current_status'] == "Чака приключване"]
