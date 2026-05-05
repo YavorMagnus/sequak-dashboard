@@ -405,40 +405,40 @@ def show_ticket_details(ticket, df_complaints_param):
         st.markdown("### 👁️ Предварителен преглед на мейла")
         st.caption("👇 **МАРКИРАЙ С МИШКАТА рамката по-долу, натисни Ctrl+C и пейстни (Ctrl+V) директно в Outlook.** Цветовете и таблиците ще се запазят!")
         
-        # HTML template (Използваме светъл фон за съвместимост с Outlook клиентите)
+        # HTML template - Използваме форматиране БЕЗ отстъпи в самите низове, за да избегнем Markdown code block парсинга
         html_content = f"""
         <div style="font-family: 'Segoe UI', Arial, sans-serif; color: #333333; max-width: 800px; background-color: #ffffff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
-            <p style="font-size: 14px;">Здравейте,<br><br>Изпращам информация относно регистриран сигнал в системата SequaK:</p>
+        <p style="font-size: 14px;">Здравейте,<br><br>Изпращам информация относно регистриран сигнал в системата SequaK:</p>
         """
         
         if inc_main_info:
             html_content += f"""
             <h4 style="color: #111111; border-bottom: 2px solid #FFD700; padding-bottom: 5px; margin-top: 20px;">Сигнал от: {ticket.get('client_name', 'Неизвестен')}</h4>
             <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px;">
-                <tr style="background-color: #f9f9f9;">
-                    <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Дата:</b> {ticket.get('event_datetime', '')}</td>
-                    <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Договор №:</b> {ticket.get('contract_number', '-')}</td>
-                </tr>
-                <tr>
-                    <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Канал:</b> {ticket.get('channel', '')}</td>
-                    <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Машина/и:</b> {ticket.get('machines', '-')}</td>
-                </tr>
-                <tr style="background-color: #f9f9f9;">
-                    <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Телефон:</b> {ticket.get('client_phone', '-')}</td>
-                    <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Имейл:</b> {ticket.get('client_email', '-')}</td>
-                </tr>
-                <tr>
-                    <td style="padding: 8px; border: 1px solid #eeeeee;"><b>ЕИК:</b> {ticket.get('client_eik', '-')}</td>
-                    <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Касае:</b> {ticket.get('case_type', '-')}</td>
-                </tr>
+            <tr style="background-color: #f9f9f9;">
+            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Дата:</b> {ticket.get('event_datetime', '')}</td>
+            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Договор №:</b> {ticket.get('contract_number', '-')}</td>
+            </tr>
+            <tr>
+            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Канал:</b> {ticket.get('channel', '')}</td>
+            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Машина/и:</b> {ticket.get('machines', '-')}</td>
+            </tr>
+            <tr style="background-color: #f9f9f9;">
+            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Телефон:</b> {ticket.get('client_phone', '-')}</td>
+            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Имейл:</b> {ticket.get('client_email', '-')}</td>
+            </tr>
+            <tr>
+            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>ЕИК:</b> {ticket.get('client_eik', '-')}</td>
+            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Касае:</b> {ticket.get('case_type', '-')}</td>
+            </tr>
             </table>
             """
             
         if inc_description:
             html_content += f"""
             <div style="background-color: #eef7ff; border-left: 4px solid #00aaff; padding: 12px; margin-bottom: 20px; font-size: 13px;">
-                <strong style="color: #005580;">Описание на проблема:</strong><br>
-                {ticket.get('description', '')}
+            <strong style="color: #005580;">Описание на проблема:</strong><br>
+            {ticket.get('description', '')}
             </div>
             """
             
@@ -448,23 +448,26 @@ def show_ticket_details(ticket, df_complaints_param):
                 dt_fmt = pd.to_datetime(rec['created_at']).strftime('%d.%m.%Y %H:%M')
                 html_content += f"""
                 <div style="margin-bottom: 10px; padding-left: 10px; border-left: 3px solid #FFD700; font-size: 13px;">
-                    <span style="color: #777777; font-size: 11px;">{dt_fmt} (от: {rec.get('created_by', '')})</span><br>
-                    <strong>{rec['action_type']}</strong><br>
-                    <span style="color: #444444;">{rec.get('action_details', '')}</span>
+                <span style="color: #777777; font-size: 11px;">{dt_fmt} (от: {rec.get('created_by', '')})</span><br>
+                <strong>{rec['action_type']}</strong><br>
+                <span style="color: #444444;">{rec.get('action_details', '')}</span>
                 </div>
                 """
                 
         html_content += f"""
-            <br>
-            <p style="font-size: 13px; border-top: 1px dashed #cccccc; padding-top: 10px;">
-                <b>Текущ статус на сигнала:</b> <span style="color: #d35400;">{current_status}</span>
-            </p>
-            <p style="font-size: 13px; color: #555555;">Поздрави,<br><b>{st.session_state.username}</b></p>
+        <br>
+        <p style="font-size: 13px; border-top: 1px dashed #cccccc; padding-top: 10px;">
+        <b>Текущ статус на сигнала:</b> <span style="color: #d35400;">{current_status}</span>
+        </p>
+        <p style="font-size: 13px; color: #555555;">Поздрави,<br><b>{st.session_state.username}</b></p>
         </div>
         """
         
-        # Показваме HTML-а на екрана в специална рамка за лесно копиране
-        st.markdown(f'<div class="email-preview-box">{html_content}</div>', unsafe_allow_html=True)
+        # МАГИЯТА: Изчистваме всички нови редове и излишни интервали, за да не го хваща Markdown като Code Block
+        clean_html = re.sub(r'\n\s+', ' ', html_content)
+        
+        # Показваме изчистения HTML на екрана в специална рамка
+        st.markdown(f'<div class="email-preview-box">{clean_html}</div>', unsafe_allow_html=True)
         
         st.markdown("<br>", unsafe_allow_html=True)
         
@@ -555,7 +558,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 5.3 (Premium Mail UI)")
+st.sidebar.caption("Входът е защитен. Версия 5.4 (Fixed Mail UI)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
