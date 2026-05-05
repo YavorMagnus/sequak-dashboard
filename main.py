@@ -402,7 +402,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 4.6 (Row-by-Row Upload)")
+st.sidebar.caption("Входът е защитен. Версия 4.7 (No Matplotlib)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -600,13 +600,13 @@ if page == "📊 ПП - Дашборд":
                 # Сортираме по процент пропуснати ползи (най-висок към най-нисък)
                 cons_stats = cons_stats.sort_values(by='Процент_Пропуски', ascending=False)
                 
-                # Форматираме таблицата за красив изглед
+                # Форматираме таблицата за красив изглед (БЕЗ MATPLOTLIB PRELIVKI)
                 styled_cons = cons_stats.style.format({
                     'Пропуснати_Евро': '€ {:,.2f}',
                     'Процент_Пропуски': '{:.1f} %',
                     'Пропуснати_Бр': '{:,.0f}',
                     'Общо търсения': '{:,.0f}'
-                }).background_gradient(subset=['Процент_Пропуски'], cmap='Reds')
+                }).set_properties(**{'color': '#FFD700'})
                 
                 st.dataframe(styled_cons, use_container_width=True, hide_index=True)
             else:
@@ -731,8 +731,6 @@ if page == "📊 ПП - Дашборд":
                                     supabase.table("missed_profits").insert(record).execute()
                                     success_count += 1
                                 except Exception:
-                                    # Ако базата изгърми (най-често заради unique constraint дубликат), 
-                                    # просто прескачаме този ред, без да чупим приложението.
                                     pass
                                 
                                 # Обновяваме визуалния статус
