@@ -21,9 +21,6 @@ st.markdown("""
     div[data-testid="metric-container"] {
         background-color: #222222; border: 1px solid #FFD700; padding: 15px; border-radius: 8px; box-shadow: 0 4px 6px rgba(255, 215, 0, 0.1);
     }
-    .market-metric {
-        background-color: #1a1a1a; border: 1px solid #444444; padding: 10px; border-radius: 8px; text-align: center; font-size: 1.1rem;
-    }
     .stTabs [data-baseweb="tab-list"] { gap: 10px; }
     .stTabs [data-baseweb="tab"] { background-color: #222222; border-radius: 4px; padding: 10px 20px; color: #FFFFFF; }
     .stTabs [aria-selected="true"] { background-color: #FFD700 !important; color: #111111 !important; font-weight: bold; }
@@ -404,7 +401,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 4.6 (Pro-Fix2)")
+st.sidebar.caption("Входът е защитен. Версия 4.5 (Fixed & Pro)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -420,15 +417,9 @@ if page == "📊 ПП - Дашборд":
             df_pp['event_date'] = pd.to_datetime(df_pp['event_date'], errors='coerce')
             if df_pp['event_date'].dt.tz is not None:
                 df_pp['event_date'] = df_pp['event_date'].dt.tz_localize(None)
-                
-            if 'consultant' not in df_pp.columns:
-                df_pp['consultant'] = 'Неизвестен'
-            else:
-                df_pp['consultant'] = df_pp['consultant'].fillna('Неизвестен')
         else:
             df_pp['company_code'] = 'UNKNOWN'
             df_pp['clean_machine'] = 'UNKNOWN'
-            df_pp['consultant'] = 'Неизвестен'
             df_pp['event_date'] = pd.to_datetime(datetime.date.today())
 
         st.title("📊 ПП (Пропуснати ползи) - Дашборд")
@@ -462,32 +453,24 @@ if page == "📊 ПП - Дашборд":
                 total_count = len(df_kpi)
                 avg_eur = total_eur / total_count if total_count > 0 else 0
                 
-                total_all_searches = len(df_filtered)
-                service_rate = ((total_all_searches - total_count) / total_all_searches * 100) if total_all_searches > 0 else 0
-                top_tag_overall = df_filtered['clean_machine'].mode()[0] if not df_filtered.empty else "-"
+                # Добавяме и броя на "Всички търсения" за визуализацията
+                all_searches_count = len(df_filtered)
             else:
-                total_eur, total_count, avg_eur, total_all_searches, service_rate, top_tag_overall = 0, 0, 0, 0, 0, "-"
+                total_eur, total_count, avg_eur, all_searches_count = 0, 0, 0, 0
 
-            # --- ОСНОВНИ KPI КАРТИ (€) ---
             st.markdown('<div class="analytic-card">', unsafe_allow_html=True)
-            kpi1, kpi2, kpi3 = st.columns(3)
-            kpi1.metric("Пропуснати ползи (неналичност/отказ)", f"€ {total_eur:,.2f}")
-            kpi2.metric("Общо броя необслужени", f"{total_count} бр.")
-            kpi3.metric("Средно на брой необслужено", f"€ {avg_eur:,.2f}")
-            
-            # --- ВТОРИЧНИ KPI КАРТИ (Пазарен обем) ---
-            st.markdown("<br>", unsafe_allow_html=True)
-            mk1, mk2, mk3 = st.columns(3)
-            with mk1: st.markdown(f'<div class="market-metric">🎯 Общ пазарен интерес: <b>{total_all_searches}</b> запитвания</div>', unsafe_allow_html=True)
-            with mk2: st.markdown(f'<div class="market-metric">📈 Коефициент на обслужване: <b>{service_rate:.1f}%</b></div>', unsafe_allow_html=True)
-            with mk3: st.markdown(f'<div class="market-metric">🔥 Най-търсено общо: <b>{top_tag_overall}</b></div>', unsafe_allow_html=True)
+            kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+            kpi1.metric("Всички търсения (Общо база)", f"{all_searches_count} бр.")
+            kpi2.metric("Пропуснати ползи (Сума)", f"€ {total_eur:,.2f}")
+            kpi3.metric("Необслужени (Брой)", f"{total_count} бр.")
+            kpi4.metric("Средно на необслужено", f"€ {avg_eur:,.2f}")
             st.markdown('</div>', unsafe_allow_html=True)
 
             col_ch1, col_ch2 = st.columns([1.5, 1])
             
             with col_ch1:
-                st.subheader("📑 Анализ по Статус / Фирми / Консултанти")
-                tab_table, tab_chart, tab_consultants = st.tabs(["📊 Детайли по Статус", "📈 Обща Графика", "👨‍💼 По Консултанти (КА)"])
+                st.subheader("📑 Анализ по Статус / Фирми")
+                tab_table, tab_chart = st.tabs(["📊 Детайли по Статус", "📈 Обща Графика"])
                 
                 with tab_table:
                     if not df_filtered.empty and 'resolution_status' in df_filtered.columns:
@@ -553,35 +536,6 @@ if page == "📊 ПП - Дашборд":
                     else:
                         st.write("Няма данни за избрания период.")
 
-                with tab_consultants:
-                    if not df_filtered.empty and 'consultant' in df_filtered.columns:
-                        cons_group = df_filtered.groupby('consultant').agg(
-                            total_calls=('resolution_status', 'count'),
-                            missed_calls=('safe_status_kpi', lambda x: x.isin(['отказва се', 'нямаме наличност']).sum())
-                        ).reset_index()
-                        
-                        cons_group = cons_group[(cons_group['total_calls'] > 0) & (cons_group['consultant'] != 'Неизвестен')]
-                        
-                        if not cons_group.empty:
-                            cons_group['missed_pct'] = (cons_group['missed_calls'] / cons_group['total_calls']) * 100
-                            
-                            max_missed = cons_group.loc[cons_group['missed_pct'].idxmax()]
-                            min_missed = cons_group.loc[cons_group['missed_pct'].idxmin()]
-                            
-                            st.markdown(f"**🔴 Най-голям % изпуснати ползи:** {max_missed['consultant']} ({max_missed['missed_pct']:.1f}% от техните запитвания)")
-                            st.markdown(f"**🟢 Най-малък % изпуснати ползи:** {min_missed['consultant']} ({min_missed['missed_pct']:.1f}% от техните запитвания)")
-                            
-                            cons_group.columns = ['Консултант (КА)', 'Общо Запитвания (Бр.)', 'Изпуснати Ползи (Бр.)', 'Процент Изпуснати (%)']
-                            styled_cons = cons_group.sort_values('Процент Изпуснати (%)', ascending=False).style.format({
-                                'Процент Изпуснати (%)': '{:.1f}%'
-                            }).set_properties(**{'color': '#00aaff'})
-                            
-                            st.dataframe(styled_cons, use_container_width=True, hide_index=True)
-                        else:
-                            st.info("Няма достатъчно данни с попълнени Консултанти (КА).")
-                    else:
-                        st.write("Колонката 'КА' липсва в данните.")
-
             with col_ch2:
                 st.subheader("🏆 Топ 15 Машини")
                 
@@ -603,7 +557,7 @@ if page == "📊 ПП - Дашборд":
                         st.write("Няма данни за този срез.")
                         return
 
-                    if current_status in ["Не предлагаме", "Информира се"]:
+                    if current_status in ["Не предлагаме", "Информира се", "Всички"]:
                         top_15 = df_to_show.groupby('clean_machine').size().reset_index(name='Брой')
                         top_15 = top_15.nlargest(15, 'Брой')
                         top_15.columns = ['Машина', 'Търсения (бр.)']
@@ -621,6 +575,43 @@ if page == "📊 ПП - Дашборд":
                 with tab_mas: show_top_15(df_top15_base[df_top15_base['company_code'] == 'MAS'], status_filter)
                 with tab_cmx: show_top_15(df_top15_base[df_top15_base['company_code'] == 'CMX'], status_filter)
             
+            # --- НОВА СЕКЦИЯ: АНАЛИЗ ПО КОНСУЛТАНТИ ---
+            st.markdown("---")
+            st.subheader("👨‍💼 Анализ по Консултанти (Процент пропуснати ползи)")
+            
+            if 'consultant' in df_filtered.columns:
+                # Вземаме всички търсения по консултант
+                cons_total = df_filtered.groupby('consultant').size().reset_index(name='Общо търсения')
+                
+                # Вземаме само пропуснатите ползи (Отказва се + Нямаме наличност)
+                cons_missed = df_filtered[df_filtered['safe_status_kpi'].isin(['отказва се', 'нямаме наличност'])]
+                cons_missed_agg = cons_missed.groupby('consultant').agg(
+                    Пропуснати_Бр=('total_value_eur', 'count'),
+                    Пропуснати_Евро=('total_value_eur', 'sum')
+                ).reset_index()
+                
+                # Обединяваме двете
+                cons_stats = pd.merge(cons_total, cons_missed_agg, on='consultant', how='left').fillna(0)
+                
+                # Изчисляваме процента на пропуснатите спрямо общия брой
+                cons_stats['Процент_Пропуски'] = (cons_stats['Пропуснати_Бр'] / cons_stats['Общо търсения']) * 100
+                
+                # Сортираме по процент пропуснати ползи (най-висок към най-нисък)
+                cons_stats = cons_stats.sort_values(by='Процент_Пропуски', ascending=False)
+                
+                # Форматираме таблицата за красив изглед
+                styled_cons = cons_stats.style.format({
+                    'Пропуснати_Евро': '€ {:,.2f}',
+                    'Процент_Пропуски': '{:.1f} %',
+                    'Пропуснати_Бр': '{:,.0f}',
+                    'Общо търсения': '{:,.0f}'
+                }).background_gradient(subset=['Процент_Пропуски'], cmap='Reds')
+                
+                st.dataframe(styled_cons, use_container_width=True, hide_index=True)
+            else:
+                st.info("В базата няма информация за Консултанти ('КА').")
+
+            # --- ЕКСПОРТ ---
             st.markdown("---")
             with st.expander("📥 Изтегляне на филтрираните данни (Excel)"):
                 st.write(f"Готови за изтегляне: **{len(df_filtered)}** записа (отговарящи на избрания по-горе период).")
@@ -643,7 +634,7 @@ if page == "📊 ПП - Дашборд":
                 )
 
     except Exception as e:
-        st.error(f"Възникна грешка: {e}")
+        st.error(f"Възникна грешка при зареждане на таблото: {e}")
 
     # ОГРАНИЧЕНИЕ ЗА ВНОС: Само Администратор може да вижда този панел
     if st.session_state.user_role == "Администратор":
@@ -659,22 +650,41 @@ if page == "📊 ПП - Дашборд":
                 
                 if st.button("🚀 ИЗПРАТИ ДАННИТЕ КЪМ БАЗАТА", type="primary"):
                     with st.spinner("Проверка за дубликати и запис... моля изчакайте!"):
-                        required_cols = ['Дата', 'Тагове', 'Обща стойност', 'Резултат', 'Фирма', 'КА']
+                        # Търсим и КА (Консултант), но го правим гъвкаво, за да не гърми, ако липсва в стар файл
+                        required_cols = ['Дата', 'Тагове', 'Обща стойност', 'Резултат', 'Фирма']
+                        
                         if all(col in df_uploaded.columns for col in required_cols):
-                            df_to_insert = df_uploaded[required_cols].copy()
-                            df_to_insert = df_to_insert.rename(columns={
+                            cols_to_extract = required_cols.copy()
+                            if 'КА' in df_uploaded.columns:
+                                cols_to_extract.append('КА')
+                                
+                            df_to_insert = df_uploaded[cols_to_extract].copy()
+                            
+                            rename_dict = {
                                 'Дата': 'event_date', 'Тагове': 'item_tag',
-                                'Обща стойност': 'total_value_eur', 'Резултат': 'resolution_status',
-                                'КА': 'consultant'
-                            })
+                                'Обща стойност': 'total_value_eur', 'Резултат': 'resolution_status'
+                            }
+                            if 'КА' in df_to_insert.columns:
+                                rename_dict['КА'] = 'consultant'
+                                
+                            df_to_insert = df_to_insert.rename(columns=rename_dict)
+                            
+                            # Безопасно обработване на колоната Консултант (КА) - без да гърми .fillna() за стрингове
+                            if 'consultant' in df_to_insert.columns:
+                                df_to_insert['consultant'] = df_to_insert['consultant'].fillna('Неизвестен').astype(str)
+                            else:
+                                df_to_insert['consultant'] = 'Неизвестен'
+
                             def get_smart_transaction_type(tag):
                                 tag_str = str(tag)
                                 if 'Наем' in tag_str: return 'Наем'
                                 elif 'Поръчка' in tag_str or 'Продажба' in tag_str: return 'Продажба'
                                 return 'Неопределен'
+                                
                             df_to_insert['transaction_type'] = df_to_insert['item_tag'].apply(get_smart_transaction_type)
                             df_to_insert['event_date'] = pd.to_datetime(df_to_insert['event_date'], dayfirst=True).dt.strftime('%Y-%m-%d %H:%M:%S')
                             
+                            # Безопасно форматиране на сумата
                             if df_to_insert['total_value_eur'].dtype == object:
                                 df_to_insert['total_value_eur'] = df_to_insert['total_value_eur'].astype(str).str.replace(r'\s+', '', regex=True).str.replace(',', '.')
                             df_to_insert['total_value_eur'] = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0)
@@ -682,11 +692,14 @@ if page == "📊 ПП - Дашборд":
                             df_to_insert['resolution_status'] = df_to_insert['resolution_status'].fillna('Неопределен')
                             df_to_insert['mapped_code'] = df_to_insert['Фирма'].apply(standardize_company_code)
                             df_to_insert['company_id'] = df_to_insert['mapped_code'].map(COMPANY_MAP)
-                            df_to_insert['consultant'] = df_to_insert['consultant'].fillna('Неизвестен').astype(str)
-                            
                             df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date', 'company_id'])
                             df_to_insert = df_to_insert.replace({float('nan'): None, np.nan: None})
                             
+                            # --- ПЕРФЕКТНИЯТ ФИЛТЪР (КРИТИЧНО ЗА ИЗБЯГВАНЕ НА ERROR 21000) ---
+                            # Първо: Премахваме дубликатите В САМИЯ ЕКСЕЛ (Заради които гърмеше Supabase)
+                            df_to_insert = df_to_insert.drop_duplicates(subset=['event_date', 'item_tag', 'total_value_eur', 'company_id'])
+
+                            # Второ: Създаваме fingerprint и сравняваме с базата данни
                             existing_fingerprints = set()
                             if not df_pp.empty and 'event_date' in df_pp.columns:
                                 db_cmp = df_pp['company_code'].astype(str).str.strip().str.upper()
@@ -704,27 +717,21 @@ if page == "📊 ПП - Дашборд":
 
                             df_to_insert['fingerprint'] = new_cmp + "|" + new_tag + "|" + new_date + "|" + new_val
                             
-                            # 1. Твоят оригинален филтър
-                            df_to_insert = df_to_insert.drop_duplicates(subset=['fingerprint'])
-                            
-                            # 2. НОВИЯТ ЩИТ: Премахва всичко, което може да предизвика конфликт в една транзакция (грешка 21000)
-                            df_to_insert = df_to_insert.drop_duplicates(subset=['event_date', 'item_tag', 'total_value_eur', 'company_id'])
-                            
                             df_final = df_to_insert[~df_to_insert['fingerprint'].isin(existing_fingerprints)].copy()
                             df_final = df_final.drop(columns=['Фирма', 'mapped_code', 'fingerprint'])
                             
                             if df_final.empty:
-                                st.info("⚠️ Всички тези данни вече са качени в базата! Няма нови записи за добавяне.")
+                                st.info("⚠️ Всички тези данни вече са качени в базата или сте качили файл само с дубликати! Няма нови записи за добавяне.")
                             else:
                                 records = df_final.to_dict(orient='records')
-                                # Без излишни интервали в on_conflict за всеки случай
-                                supabase.table("missed_profits").upsert(records, on_conflict="event_date,item_tag,total_value_eur,company_id").execute()
+                                # Записваме НОВИТЕ уникални редове. Заради филтрите горе, това вече няма да гърми!
+                                supabase.table("missed_profits").insert(records).execute()
                                 st.success(f"🎉 Успешно добавени {len(df_final)} НОВИ записа! Презареждам...")
                                 st.rerun() 
                         else:
-                            st.warning(f"⚠️ Липсват нужни колони. Уверете се, че Екселът съдържа следните колонки точно с тези имена: {', '.join(required_cols)}")
+                            st.warning("⚠️ Липсват нужни колони (Уверете се, че има 'Дата', 'Тагове', 'Обща стойност', 'Резултат', 'Фирма').")
             except Exception as e:
-                st.error(f"Възникна грешка: {e}")
+                st.error(f"Възникна грешка при четене на файла: {e}")
 
 # ==========================================================
 # --- СТРАНИЦА 2: РЕГИСТЪР ОПЛАКВАНИЯ (РО) ---
