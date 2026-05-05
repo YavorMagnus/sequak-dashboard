@@ -403,7 +403,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 5.0 (Final Polishes)")
+st.sidebar.caption("Входът е защитен. Версия 5.1 (White text & Defaults)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -519,7 +519,7 @@ if page == "📊 ПП - Дашборд":
                             'Отказва се (€)': '€ {:,.2f}',
                             'Няма наличност (€)': '€ {:,.2f}',
                             'Общо (€)': '€ {:,.2f}'
-                        }).set_properties(**{'color': '#FFD700'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white !important')]}])
+                        }).set_properties(**{'color': '#FFFFFF'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white !important')]}])
                         
                         st.dataframe(styled_status, use_container_width=True, hide_index=True)
                     else:
@@ -543,7 +543,8 @@ if page == "📊 ПП - Дашборд":
                 status_filter = st.radio(
                     "Срез по статус на обаждането:",
                     ["Всички", "Информира се", "Отказва се", "Нямаме наличност", "Не предлагаме"],
-                    horizontal=True
+                    horizontal=True,
+                    index=3 # Това прави "Нямаме наличност" избрано по подразбиране
                 )
 
                 if status_filter != "Всички":
@@ -562,11 +563,11 @@ if page == "📊 ПП - Дашборд":
                         top_15 = df_to_show.groupby('clean_machine').size().reset_index(name='Брой')
                         top_15 = top_15.nlargest(15, 'Брой')
                         top_15.columns = ['Машина', 'Търсения (бр.)']
-                        styled_df = top_15.style.format({'Търсения (бр.)': '{} бр.'}).set_properties(**{'color': '#FFD700'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white !important')]}])
+                        styled_df = top_15.style.format({'Търсения (бр.)': '{} бр.'}).set_properties(**{'color': '#FFFFFF'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white !important')]}])
                     else:
                         top_15 = df_to_show.groupby('clean_machine')['total_value_eur'].sum().nlargest(15).reset_index()
                         top_15.columns = ['Машина', 'Изпусната сума (€)']
-                        styled_df = top_15.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFD700'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white !important')]}])
+                        styled_df = top_15.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFFFFF'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white !important')]}])
 
                     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
@@ -580,7 +581,6 @@ if page == "📊 ПП - Дашборд":
             st.markdown("---")
             st.subheader("👨‍💼 Анализ на отказите по консултанти")
             
-            # Добавяме радио бутони за филтриране по фирма (както поиска)
             cons_comp_filter = st.radio(
                 "Избор на фирма (за анализ на консултанти):",
                 ["Всички", "REN", "CIM", "MAS", "CMX"],
@@ -588,7 +588,6 @@ if page == "📊 ПП - Дашборд":
                 key="cons_comp_filter"
             )
             
-            # Прилагаме филтъра към данните за консултантите
             if cons_comp_filter != "Всички":
                 if cons_comp_filter == "CIM":
                     df_cons_base = df_filtered[df_filtered['company_code'].isin(['CIM', 'RCD'])].copy()
@@ -598,49 +597,40 @@ if page == "📊 ПП - Дашборд":
                 df_cons_base = df_filtered.copy()
             
             if 'consultant' in df_cons_base.columns and not df_cons_base.empty:
-                # 1. Общо анализирани
                 cons_total = df_cons_base.groupby('consultant').size().reset_index(name='Общо анализирани')
                 
-                # 2. Откази (само статус "Отказва се")
                 df_refused = df_cons_base[df_cons_base['safe_status_kpi'].str.contains('отказва се', na=False)]
                 cons_refused = df_refused.groupby('consultant').agg(
                     Отказва_се=('total_value_eur', 'count'),
                     EUR_откази=('total_value_eur', 'sum')
                 ).reset_index()
                 
-                # 3. Проблемни разговори (търсим вариации на "проблем" в статуса)
                 df_problem = df_cons_base[df_cons_base['safe_status_kpi'].str.contains('проблем', na=False)]
                 cons_problem = df_problem.groupby('consultant').size().reset_index(name='Проблемни')
                 
-                # 4. Обединяваме всичко в една обща таблица
                 cons_stats = pd.merge(cons_total, cons_refused, on='consultant', how='left')
                 cons_stats = pd.merge(cons_stats, cons_problem, on='consultant', how='left').fillna(0)
                 
-                # Преименуваме първоначалните колони за по-ясен изглед
                 cons_stats = cons_stats.rename(columns={
                     'consultant': 'Име на консултант',
                     'Отказва_се': 'Отказва се',
                     'EUR_откази': 'EUR откази'
                 })
                 
-                # 5. Изчисляваме процентите
                 cons_stats['% откази'] = np.where(cons_stats['Общо анализирани'] > 0, (cons_stats['Отказва се'] / cons_stats['Общо анализирани']) * 100, 0)
                 cons_stats['% проблемни'] = np.where(cons_stats['Общо анализирани'] > 0, (cons_stats['Проблемни'] / cons_stats['Общо анализирани']) * 100, 0)
                 
-                # 6. Подреждаме колоните в желания от теб ред
                 cols_order = ['Име на консултант', 'Общо анализирани', 'Отказва се', '% откази', 'EUR откази', 'Проблемни', '% проблемни']
                 cons_stats = cons_stats[cols_order]
                 
-                # Сортираме по брой откази (от най-много към най-малко) като основен критерий
-                cons_stats = cons_stats.sort_values(by=['Общо анализирани', '% откази'], ascending=[False, False])
+                # Сортиране по подразбиране низходящо по EUR откази
+                cons_stats = cons_stats.sort_values(by=['EUR откази'], ascending=[False])
                 
-                # 7. ЛОГИКА ЗА СКРИВАНЕ ДО 01.06
                 hide_date = datetime.date(2026, 6, 1)
                 is_reader = st.session_state.user_role != "Администратор"
                 if is_reader and datetime.date.today() < hide_date:
                     cons_stats = cons_stats.drop(columns=['Проблемни', '% проблемни'])
 
-                # 8. Форматираме таблицата
                 format_dict = {
                     'Общо анализирани': '{:,.0f}',
                     'Отказва се': '{:,.0f}',
@@ -652,7 +642,8 @@ if page == "📊 ПП - Дашборд":
                     format_dict['Проблемни'] = '{:,.0f}'
                     format_dict['% проблемни'] = '{:.1f} %'
 
-                styled_cons = cons_stats.style.format(format_dict).set_properties(**{'color': '#FFD700'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white !important')]}])
+                # Бели данни вътре в таблицата
+                styled_cons = cons_stats.style.format(format_dict).set_properties(**{'color': '#FFFFFF'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white !important')]}])
                 
                 st.dataframe(styled_cons, use_container_width=True, hide_index=True)
             else:
