@@ -31,8 +31,9 @@ st.markdown("""
     .client-stream h4 { color: #00aaff; margin-top: 0; }
     .analytic-card { background-color: #1e1e1e; padding: 20px; border-radius: 8px; border-top: 3px solid #FFD700; margin-bottom: 20px; }
     
-    /* Стилизиране на таблиците в дашборда */
+    /* Стилизиране на таблиците в дашборда и агресивен опит за бели заглавия */
     [data-testid="stDataFrame"] { background-color: #1e1e1e; border-radius: 8px; }
+    th, [data-testid="stDataFrame"] th, .stDataFrame div[data-testid="stColumnHeader"] span { color: #FFFFFF !important; }
     
     /* Стилизиране на Radio бутоните да приличат на табове */
     div[role="radiogroup"] { flex-wrap: wrap; gap: 10px; margin-bottom: 15px; }
@@ -402,7 +403,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 4.9 (Cosmetics & Timed Display)")
+st.sidebar.caption("Входът е защитен. Версия 5.0 (Final Polishes)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -518,7 +519,7 @@ if page == "📊 ПП - Дашборд":
                             'Отказва се (€)': '€ {:,.2f}',
                             'Няма наличност (€)': '€ {:,.2f}',
                             'Общо (€)': '€ {:,.2f}'
-                        }).set_properties(**{'color': '#FFD700'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white')]}])
+                        }).set_properties(**{'color': '#FFD700'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white !important')]}])
                         
                         st.dataframe(styled_status, use_container_width=True, hide_index=True)
                     else:
@@ -561,11 +562,11 @@ if page == "📊 ПП - Дашборд":
                         top_15 = df_to_show.groupby('clean_machine').size().reset_index(name='Брой')
                         top_15 = top_15.nlargest(15, 'Брой')
                         top_15.columns = ['Машина', 'Търсения (бр.)']
-                        styled_df = top_15.style.format({'Търсения (бр.)': '{} бр.'}).set_properties(**{'color': '#FFD700'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white')]}])
+                        styled_df = top_15.style.format({'Търсения (бр.)': '{} бр.'}).set_properties(**{'color': '#FFD700'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white !important')]}])
                     else:
                         top_15 = df_to_show.groupby('clean_machine')['total_value_eur'].sum().nlargest(15).reset_index()
                         top_15.columns = ['Машина', 'Изпусната сума (€)']
-                        styled_df = top_15.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFD700'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white')]}])
+                        styled_df = top_15.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFD700'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white !important')]}])
 
                     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
@@ -577,21 +578,38 @@ if page == "📊 ПП - Дашборд":
             
             # --- НОВА СЕКЦИЯ: АНАЛИЗ ПО КОНСУЛТАНТИ ---
             st.markdown("---")
-            st.subheader("👨‍💼 Анализ по Консултанти")
+            st.subheader("👨‍💼 Анализ на отказите по консултанти")
             
-            if 'consultant' in df_filtered.columns:
+            # Добавяме радио бутони за филтриране по фирма (както поиска)
+            cons_comp_filter = st.radio(
+                "Избор на фирма (за анализ на консултанти):",
+                ["Всички", "REN", "CIM", "MAS", "CMX"],
+                horizontal=True,
+                key="cons_comp_filter"
+            )
+            
+            # Прилагаме филтъра към данните за консултантите
+            if cons_comp_filter != "Всички":
+                if cons_comp_filter == "CIM":
+                    df_cons_base = df_filtered[df_filtered['company_code'].isin(['CIM', 'RCD'])].copy()
+                else:
+                    df_cons_base = df_filtered[df_filtered['company_code'] == cons_comp_filter].copy()
+            else:
+                df_cons_base = df_filtered.copy()
+            
+            if 'consultant' in df_cons_base.columns and not df_cons_base.empty:
                 # 1. Общо анализирани
-                cons_total = df_filtered.groupby('consultant').size().reset_index(name='Общо анализирани')
+                cons_total = df_cons_base.groupby('consultant').size().reset_index(name='Общо анализирани')
                 
                 # 2. Откази (само статус "Отказва се")
-                df_refused = df_filtered[df_filtered['safe_status_kpi'].str.contains('отказва се', na=False)]
+                df_refused = df_cons_base[df_cons_base['safe_status_kpi'].str.contains('отказва се', na=False)]
                 cons_refused = df_refused.groupby('consultant').agg(
                     Отказва_се=('total_value_eur', 'count'),
                     EUR_откази=('total_value_eur', 'sum')
                 ).reset_index()
                 
                 # 3. Проблемни разговори (търсим вариации на "проблем" в статуса)
-                df_problem = df_filtered[df_filtered['safe_status_kpi'].str.contains('проблем', na=False)]
+                df_problem = df_cons_base[df_cons_base['safe_status_kpi'].str.contains('проблем', na=False)]
                 cons_problem = df_problem.groupby('consultant').size().reset_index(name='Проблемни')
                 
                 # 4. Обединяваме всичко в една обща таблица
@@ -630,16 +648,15 @@ if page == "📊 ПП - Дашборд":
                     'EUR откази': '€ {:,.2f}'
                 }
                 
-                # Добавяме форматиране за скритите колони само ако те все още съществуват в таблицата
                 if 'Проблемни' in cons_stats.columns:
                     format_dict['Проблемни'] = '{:,.0f}'
                     format_dict['% проблемни'] = '{:.1f} %'
 
-                styled_cons = cons_stats.style.format(format_dict).set_properties(**{'color': '#FFD700'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white')]}])
+                styled_cons = cons_stats.style.format(format_dict).set_properties(**{'color': '#FFD700'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white !important')]}])
                 
                 st.dataframe(styled_cons, use_container_width=True, hide_index=True)
             else:
-                st.info("В базата няма информация за Консултанти ('КА').")
+                st.info("В базата няма информация за Консултанти ('КА') за избрания срез.")
 
             # --- ЕКСПОРТ ---
             st.markdown("---")
