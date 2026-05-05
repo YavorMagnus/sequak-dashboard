@@ -402,7 +402,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 4.7 (No Matplotlib)")
+st.sidebar.caption("Входът е защитен. Версия 4.8 (Detailed Consultant Logic)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -454,7 +454,6 @@ if page == "📊 ПП - Дашборд":
                 total_count = len(df_kpi)
                 avg_eur = total_eur / total_count if total_count > 0 else 0
                 
-                # Добавяме и броя на "Всички търсения" за визуализацията
                 all_searches_count = len(df_filtered)
             else:
                 total_eur, total_count, avg_eur, all_searches_count = 0, 0, 0, 0
@@ -578,34 +577,53 @@ if page == "📊 ПП - Дашборд":
             
             # --- НОВА СЕКЦИЯ: АНАЛИЗ ПО КОНСУЛТАНТИ ---
             st.markdown("---")
-            st.subheader("👨‍💼 Анализ по Консултанти (Процент пропуснати ползи)")
+            st.subheader("👨‍💼 Анализ по Консултанти")
             
             if 'consultant' in df_filtered.columns:
-                # Вземаме всички търсения по консултант
-                cons_total = df_filtered.groupby('consultant').size().reset_index(name='Общо търсения')
+                # 1. Общо прослушани
+                cons_total = df_filtered.groupby('consultant').size().reset_index(name='Общо прослушани')
                 
-                # Вземаме само пропуснатите ползи (Отказва се + Нямаме наличност)
-                cons_missed = df_filtered[df_filtered['safe_status_kpi'].isin(['отказва се', 'нямаме наличност'])]
-                cons_missed_agg = cons_missed.groupby('consultant').agg(
-                    Пропуснати_Бр=('total_value_eur', 'count'),
-                    Пропуснати_Евро=('total_value_eur', 'sum')
+                # 2. Откази (само статус "Отказва се")
+                df_refused = df_filtered[df_filtered['safe_status_kpi'].str.contains('отказва се', na=False)]
+                cons_refused = df_refused.groupby('consultant').agg(
+                    Отказва_се=('total_value_eur', 'count'),
+                    EUR_откази=('total_value_eur', 'sum')
                 ).reset_index()
                 
-                # Обединяваме двете
-                cons_stats = pd.merge(cons_total, cons_missed_agg, on='consultant', how='left').fillna(0)
+                # 3. Проблемни разговори (търсим вариации на "проблем" в статуса)
+                df_problem = df_filtered[df_filtered['safe_status_kpi'].str.contains('проблем', na=False)]
+                cons_problem = df_problem.groupby('consultant').size().reset_index(name='Проблемни')
                 
-                # Изчисляваме процента на пропуснатите спрямо общия брой
-                cons_stats['Процент_Пропуски'] = (cons_stats['Пропуснати_Бр'] / cons_stats['Общо търсения']) * 100
+                # 4. Обединяваме всичко в една обща таблица
+                cons_stats = pd.merge(cons_total, cons_refused, on='consultant', how='left')
+                cons_stats = pd.merge(cons_stats, cons_problem, on='consultant', how='left').fillna(0)
                 
-                # Сортираме по процент пропуснати ползи (най-висок към най-нисък)
-                cons_stats = cons_stats.sort_values(by='Процент_Пропуски', ascending=False)
+                # Преименуваме първоначалните колони за по-ясен изглед
+                cons_stats = cons_stats.rename(columns={
+                    'consultant': 'Име на консултант',
+                    'Отказва_се': 'Отказва се',
+                    'EUR_откази': 'EUR откази'
+                })
                 
-                # Форматираме таблицата за красив изглед (БЕЗ MATPLOTLIB PRELIVKI)
+                # 5. Изчисляваме процентите
+                cons_stats['% откази'] = np.where(cons_stats['Общо прослушани'] > 0, (cons_stats['Отказва се'] / cons_stats['Общо прослушани']) * 100, 0)
+                cons_stats['% проблемни'] = np.where(cons_stats['Общо прослушани'] > 0, (cons_stats['Проблемни'] / cons_stats['Общо прослушани']) * 100, 0)
+                
+                # 6. Подреждаме колоните в желания от теб ред
+                cols_order = ['Име на консултант', 'Общо прослушани', 'Отказва се', '% откази', 'EUR откази', 'Проблемни', '% проблемни']
+                cons_stats = cons_stats[cols_order]
+                
+                # Сортираме по брой откази (от най-много към най-малко) като основен критерий
+                cons_stats = cons_stats.sort_values(by=['Общо прослушани', '% откази'], ascending=[False, False])
+                
+                # Форматираме таблицата (всичко да е със златисто жълтия цвят)
                 styled_cons = cons_stats.style.format({
-                    'Пропуснати_Евро': '€ {:,.2f}',
-                    'Процент_Пропуски': '{:.1f} %',
-                    'Пропуснати_Бр': '{:,.0f}',
-                    'Общо търсения': '{:,.0f}'
+                    'Общо прослушани': '{:,.0f}',
+                    'Отказва се': '{:,.0f}',
+                    '% откази': '{:.1f} %',
+                    'EUR откази': '€ {:,.2f}',
+                    'Проблемни': '{:,.0f}',
+                    '% проблемни': '{:.1f} %'
                 }).set_properties(**{'color': '#FFD700'})
                 
                 st.dataframe(styled_cons, use_container_width=True, hide_index=True)
