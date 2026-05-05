@@ -402,7 +402,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 4.8 (Detailed Consultant Logic)")
+st.sidebar.caption("Входът е защитен. Версия 4.9 (Cosmetics & Timed Display)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -460,10 +460,10 @@ if page == "📊 ПП - Дашборд":
 
             st.markdown('<div class="analytic-card">', unsafe_allow_html=True)
             kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-            kpi1.metric("Всички търсения (Общо база)", f"{all_searches_count} бр.")
-            kpi2.metric("Пропуснати ползи (Сума)", f"€ {total_eur:,.2f}")
-            kpi3.metric("Необслужени (Брой)", f"{total_count} бр.")
-            kpi4.metric("Средно на необслужено", f"€ {avg_eur:,.2f}")
+            kpi1.metric("Анализирани разговори (бр.)", f"{all_searches_count} бр.")
+            kpi2.metric("Пропуснати ползи (отказва се/няма наличност)", f"€ {total_eur:,.2f}")
+            kpi3.metric("Обаждания с пропусната полза", f"{total_count} бр.")
+            kpi4.metric("Средна пропусната полза", f"€ {avg_eur:,.2f}")
             st.markdown('</div>', unsafe_allow_html=True)
 
             col_ch1, col_ch2 = st.columns([1.5, 1])
@@ -518,7 +518,7 @@ if page == "📊 ПП - Дашборд":
                             'Отказва се (€)': '€ {:,.2f}',
                             'Няма наличност (€)': '€ {:,.2f}',
                             'Общо (€)': '€ {:,.2f}'
-                        }).set_properties(**{'color': '#FFD700'})
+                        }).set_properties(**{'color': '#FFD700'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white')]}])
                         
                         st.dataframe(styled_status, use_container_width=True, hide_index=True)
                     else:
@@ -561,11 +561,11 @@ if page == "📊 ПП - Дашборд":
                         top_15 = df_to_show.groupby('clean_machine').size().reset_index(name='Брой')
                         top_15 = top_15.nlargest(15, 'Брой')
                         top_15.columns = ['Машина', 'Търсения (бр.)']
-                        styled_df = top_15.style.format({'Търсения (бр.)': '{} бр.'}).set_properties(**{'color': '#FFD700'})
+                        styled_df = top_15.style.format({'Търсения (бр.)': '{} бр.'}).set_properties(**{'color': '#FFD700'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white')]}])
                     else:
                         top_15 = df_to_show.groupby('clean_machine')['total_value_eur'].sum().nlargest(15).reset_index()
                         top_15.columns = ['Машина', 'Изпусната сума (€)']
-                        styled_df = top_15.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFD700'})
+                        styled_df = top_15.style.format({'Изпусната сума (€)': '€ {:,.2f}'}).set_properties(**{'color': '#FFD700'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white')]}])
 
                     st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
@@ -580,8 +580,8 @@ if page == "📊 ПП - Дашборд":
             st.subheader("👨‍💼 Анализ по Консултанти")
             
             if 'consultant' in df_filtered.columns:
-                # 1. Общо прослушани
-                cons_total = df_filtered.groupby('consultant').size().reset_index(name='Общо прослушани')
+                # 1. Общо анализирани
+                cons_total = df_filtered.groupby('consultant').size().reset_index(name='Общо анализирани')
                 
                 # 2. Откази (само статус "Отказва се")
                 df_refused = df_filtered[df_filtered['safe_status_kpi'].str.contains('отказва се', na=False)]
@@ -606,25 +606,36 @@ if page == "📊 ПП - Дашборд":
                 })
                 
                 # 5. Изчисляваме процентите
-                cons_stats['% откази'] = np.where(cons_stats['Общо прослушани'] > 0, (cons_stats['Отказва се'] / cons_stats['Общо прослушани']) * 100, 0)
-                cons_stats['% проблемни'] = np.where(cons_stats['Общо прослушани'] > 0, (cons_stats['Проблемни'] / cons_stats['Общо прослушани']) * 100, 0)
+                cons_stats['% откази'] = np.where(cons_stats['Общо анализирани'] > 0, (cons_stats['Отказва се'] / cons_stats['Общо анализирани']) * 100, 0)
+                cons_stats['% проблемни'] = np.where(cons_stats['Общо анализирани'] > 0, (cons_stats['Проблемни'] / cons_stats['Общо анализирани']) * 100, 0)
                 
                 # 6. Подреждаме колоните в желания от теб ред
-                cols_order = ['Име на консултант', 'Общо прослушани', 'Отказва се', '% откази', 'EUR откази', 'Проблемни', '% проблемни']
+                cols_order = ['Име на консултант', 'Общо анализирани', 'Отказва се', '% откази', 'EUR откази', 'Проблемни', '% проблемни']
                 cons_stats = cons_stats[cols_order]
                 
                 # Сортираме по брой откази (от най-много към най-малко) като основен критерий
-                cons_stats = cons_stats.sort_values(by=['Общо прослушани', '% откази'], ascending=[False, False])
+                cons_stats = cons_stats.sort_values(by=['Общо анализирани', '% откази'], ascending=[False, False])
                 
-                # Форматираме таблицата (всичко да е със златисто жълтия цвят)
-                styled_cons = cons_stats.style.format({
-                    'Общо прослушани': '{:,.0f}',
+                # 7. ЛОГИКА ЗА СКРИВАНЕ ДО 01.06
+                hide_date = datetime.date(2026, 6, 1)
+                is_reader = st.session_state.user_role != "Администратор"
+                if is_reader and datetime.date.today() < hide_date:
+                    cons_stats = cons_stats.drop(columns=['Проблемни', '% проблемни'])
+
+                # 8. Форматираме таблицата
+                format_dict = {
+                    'Общо анализирани': '{:,.0f}',
                     'Отказва се': '{:,.0f}',
                     '% откази': '{:.1f} %',
-                    'EUR откази': '€ {:,.2f}',
-                    'Проблемни': '{:,.0f}',
-                    '% проблемни': '{:.1f} %'
-                }).set_properties(**{'color': '#FFD700'})
+                    'EUR откази': '€ {:,.2f}'
+                }
+                
+                # Добавяме форматиране за скритите колони само ако те все още съществуват в таблицата
+                if 'Проблемни' in cons_stats.columns:
+                    format_dict['Проблемни'] = '{:,.0f}'
+                    format_dict['% проблемни'] = '{:.1f} %'
+
+                styled_cons = cons_stats.style.format(format_dict).set_properties(**{'color': '#FFD700'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white')]}])
                 
                 st.dataframe(styled_cons, use_container_width=True, hide_index=True)
             else:
