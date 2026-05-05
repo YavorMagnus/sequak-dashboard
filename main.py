@@ -173,7 +173,6 @@ def show_ticket_details(ticket, df_complaints_param):
     
     tab_main, tab_email = st.tabs(["📑 Данни и Действия", "📧 Композиране на мейл (Секси Режим)"])
     
-    # Вземане на хронологията предварително, защото се ползва и в двата таба
     history_res = supabase.table("complaint_history").select("*").eq("complaint_id", ticket['id']).order("created_at", desc=False).execute()
     history_data = history_res.data
     current_status = ticket.get('current_status', 'Чака заключение и препоръка')
@@ -242,6 +241,7 @@ def show_ticket_details(ticket, df_complaints_param):
                     "action_type": f"Диспут с клиент: {action_text}",
                     "created_by": st.session_state.username
                 }).execute()
+                st.session_state.auto_open_ticket_id = ticket['id']
                 st.rerun()
 
             if new_client_action:
@@ -259,17 +259,22 @@ def show_ticket_details(ticket, df_complaints_param):
                     c_deadline = st.date_input("Очакван отговор до (Срок)", key=f"pd_{ticket['id']}")
                 elif client_step == "3. Удовлетвореност (Финал)":
                     is_satisfied = st.radio("Удовлетворен ли е клиентът?", ["Да", "Не"], horizontal=True, key=f"sat_{ticket['id']}")
-                    follow_up = st.text_input("Коментар (ако НЕ е удовлетворен)", key=f"fc_{ticket['id']}")
-                    c_details = f"Клиентът е удовлетворен: {is_satisfied}. Коментар: {follow_up}"
+                    follow_up = st.text_input("Детайли към удовлетвореността", key=f"fc_{ticket['id']}")
+                    c_details = f"Клиентът е удовлетворен: {is_satisfied}. Детайли: {follow_up}"
+
+                client_comment = st.text_area("Допълнителен коментар (незадължително)", max_chars=500, key=f"cc_{ticket['id']}")
 
                 if st.button("💾 Запиши действие с клиент", key=f"btn_c_{ticket['id']}"):
+                    final_c_details = c_details
+                    if client_comment:
+                        final_c_details += f" | Коментар: {client_comment}"
                     history_payload = {
                         "complaint_id": ticket['id'], "action_type": f"Клиент: {client_step.split('. ')[1]}",
-                        "action_details": c_details, "deadline_date": str(c_deadline) if c_deadline else None,
+                        "action_details": final_c_details, "deadline_date": str(c_deadline) if c_deadline else None,
                         "created_by": st.session_state.username
                     }
                     supabase.table("complaint_history").insert(history_payload).execute()
-                    st.success("Действието с клиента е записано в хронологията!")
+                    st.session_state.auto_open_ticket_id = ticket['id']
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
 
@@ -280,7 +285,7 @@ def show_ticket_details(ticket, df_complaints_param):
             
             if current_status == "Чака проверка":
                 st.warning("В момента се изисква проверка според последната стъпка.")
-                check_result = st.text_input("До какво доведе проверката? (до 100 символа)", max_chars=100, key=f"cr_{ticket['id']}")
+                check_result = st.text_area("До какво доведе проверката? (до 500 символа)", max_chars=500, key=f"cr_{ticket['id']}")
                 if st.button("Приключи проверката", type="primary", key=f"btn_chk_{ticket['id']}"):
                     if not check_result:
                         st.error("Моля, въведете резултат от проверката.")
@@ -290,13 +295,19 @@ def show_ticket_details(ticket, df_complaints_param):
                             "action_details": check_result, "created_by": st.session_state.username
                         }).execute()
                         supabase.table("complaints").update({"current_status": "Чака заключение и препоръка", "current_deadline": None}).eq("id", ticket['id']).execute()
+                        st.session_state.auto_open_ticket_id = ticket['id']
                         st.rerun()
             else:
                 new_conc = st.selectbox("Заключение контролинг", ["Избери..."] + CONCLUSIONS, key=f"nc_{ticket['id']}")
                 new_rec = st.selectbox("Препоръка контролинг", ["Избери..."] + RECOMMENDATIONS, key=f"nr_{ticket['id']}")
+                
                 field_details = ""
+                internal_comment = ""
+                
                 if new_rec == "Проверка (поле)":
                     field_details = st.text_input("Какво точно ще се проверява?", max_chars=100, key=f"fd_{ticket['id']}")
+                else:
+                    internal_comment = st.text_area("Коментар към действието (незадължително)", max_chars=500, key=f"ic_{ticket['id']}")
                     
                 assignee = st.selectbox("Възложено на (Роля)", ["Избери..."] + ROLES_LIST, key=f"as_{ticket['id']}")
                 deadline = st.date_input("Ръчен срок (Край до)", value=None, key=f"dl_{ticket['id']}")
@@ -314,24 +325,36 @@ def show_ticket_details(ticket, df_complaints_param):
                     else:
                         next_status = "Чака проверка" if new_rec == "Проверка (поле)" else "Чака приключване"
                         action_text = f"Заключение: {new_conc} | Препоръка: {new_rec}"
-                        full_details = f"{action_text}. Детайли: {field_details}" if field_details else action_text
+                        
+                        if field_details:
+                            full_details = f"{action_text}. Детайли: {field_details}"
+                        elif internal_comment:
+                            full_details = f"{action_text}. Коментар: {internal_comment}"
+                        else:
+                            full_details = action_text
+                            
                         supabase.table("complaint_history").insert({
                             "complaint_id": ticket['id'], "action_type": "Назначена стъпка", "action_details": full_details,
                             "assigned_to": assignee if assignee != "Избери..." else None, "deadline_date": str(deadline) if deadline else None,
                             "created_by": st.session_state.username
                         }).execute()
                         supabase.table("complaints").update({"current_status": next_status, "current_deadline": str(deadline) if deadline else None}).eq("id", ticket['id']).execute()
+                        st.session_state.auto_open_ticket_id = ticket['id']
                         st.rerun()
                         
                 if close_ticket:
+                    close_details = "Сигналът е приключен."
+                    if internal_comment:
+                        close_details += f" Коментар: {internal_comment}"
                     supabase.table("complaints").update({"current_status": "Приключено", "current_deadline": None}).eq("id", ticket['id']).execute()
-                    supabase.table("complaint_history").insert({"complaint_id": ticket['id'], "action_type": "Сигналът е приключен", "created_by": st.session_state.username}).execute()
+                    supabase.table("complaint_history").insert({"complaint_id": ticket['id'], "action_type": "Сигналът е приключен", "action_details": close_details, "created_by": st.session_state.username}).execute()
+                    st.session_state.auto_open_ticket_id = ticket['id']
                     st.rerun()
 
         st.markdown("---")
         with st.expander("🚫 Опции за анулиране (Сгрешен запис)"):
             st.warning("Внимание: Анулирането ще преустанови следенето на този сигнал.")
-            cancel_reason = st.text_input("Причина за анулиране (задължително):", key=f"cancel_reason_{ticket['id']}")
+            cancel_reason = st.text_area("Причина за анулиране (задължително):", max_chars=500, key=f"cancel_reason_{ticket['id']}")
             if st.button("ПОТВЪРДИ АНУЛИРАНЕТО", type="secondary", key=f"btn_cancel_{ticket['id']}"):
                 if not cancel_reason.strip(): st.error("Моля, въведете причина за анулирането.")
                 else:
@@ -340,6 +363,7 @@ def show_ticket_details(ticket, df_complaints_param):
                         "action_details": f"Причина: {cancel_reason}", "created_by": st.session_state.username
                     }).execute()
                     supabase.table("complaints").update({"current_status": "Сгрешен/Анулиран", "current_deadline": None}).eq("id", ticket['id']).execute()
+                    st.session_state.auto_open_ticket_id = ticket['id']
                     st.rerun()
 
     # --- ТАБ 2: СЕКСИ ИМЕЙЛ КОМПОЗИТОР ---
@@ -392,7 +416,6 @@ def show_ticket_details(ticket, df_complaints_param):
                     """, unsafe_allow_html=True)
                 with col_chk_h:
                     st.markdown("<br>", unsafe_allow_html=True)
-                    # Чекбокс за всеки отделен запис в историята
                     is_checked = st.checkbox("", value=True, key=f"chk_hist_{ticket['id']}_{idx}")
                     if is_checked:
                         selected_history.append(rec)
@@ -405,7 +428,6 @@ def show_ticket_details(ticket, df_complaints_param):
         st.markdown("### 👁️ Предварителен преглед на мейла")
         st.caption("👇 **МАРКИРАЙ С МИШКАТА рамката по-долу, натисни Ctrl+C и пейстни (Ctrl+V) директно в Outlook.** Цветовете и таблиците ще се запазят!")
         
-        # HTML template - Използваме форматиране БЕЗ отстъпи в самите низове, за да избегнем Markdown code block парсинга
         html_content = f"""
         <div style="font-family: 'Segoe UI', Arial, sans-serif; color: #333333; max-width: 800px; background-color: #ffffff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
         <p style="font-size: 14px;">Здравейте,<br><br>Изпращам информация относно регистриран сигнал в системата SequaK:</p>
@@ -463,15 +485,10 @@ def show_ticket_details(ticket, df_complaints_param):
         </div>
         """
         
-        # МАГИЯТА: Изчистваме всички нови редове и излишни интервали, за да не го хваща Markdown като Code Block
         clean_html = re.sub(r'\n\s+', ' ', html_content)
-        
-        # Показваме изчистения HTML на екрана в специална рамка
         st.markdown(f'<div class="email-preview-box">{clean_html}</div>', unsafe_allow_html=True)
-        
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # Fallback Plain Text бутон
         with st.expander("🔗 Резервен вариант (Ако искате мейл само с прост текст)"):
             st.write("Натиснете бутона по-долу, за да отворите Outlook директно, но имайте предвид, че таблиците и цветовете няма да се прехвърлят.")
             plain_text = f"Здравейте,\n\nСигнал от: {ticket.get('client_name', 'Неизвестен')}\nТекущ статус: {current_status}\n\n"
@@ -558,7 +575,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 5.4 (Fixed Mail UI)")
+st.sidebar.caption("Входът е защитен. Версия 5.5 (Keep Ticket Open & Comments)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -699,7 +716,7 @@ if page == "📊 ПП - Дашборд":
                     "Срез по статус на обаждането:",
                     ["Всички", "Информира се", "Отказва се", "Нямаме наличност", "Не предлагаме"],
                     horizontal=True,
-                    index=3 # Това прави "Нямаме наличност" избрано по подразбиране
+                    index=3
                 )
 
                 if status_filter != "Всички":
@@ -778,7 +795,6 @@ if page == "📊 ПП - Дашборд":
                 cols_order = ['Име на консултант', 'Общо анализирани', 'Отказва се', '% откази', 'EUR откази', 'Проблемни', '% проблемни']
                 cons_stats = cons_stats[cols_order]
                 
-                # Сортиране по подразбиране низходящо по EUR откази
                 cons_stats = cons_stats.sort_values(by=['EUR откази'], ascending=[False])
                 
                 hide_date = datetime.date(2026, 6, 1)
@@ -797,7 +813,6 @@ if page == "📊 ПП - Дашборд":
                     format_dict['Проблемни'] = '{:,.0f}'
                     format_dict['% проблемни'] = '{:.1f} %'
 
-                # Бели данни вътре в таблицата
                 styled_cons = cons_stats.style.format(format_dict).set_properties(**{'color': '#FFFFFF'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white !important')]}])
                 
                 st.dataframe(styled_cons, use_container_width=True, hide_index=True)
@@ -884,10 +899,8 @@ if page == "📊 ПП - Дашборд":
                         df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date', 'company_id'])
                         df_to_insert = df_to_insert.replace({float('nan'): None, np.nan: None})
                         
-                        # Премахваме очевидните дубликати първо в самия Excel
                         df_to_insert = df_to_insert.drop_duplicates(subset=['event_date', 'item_tag', 'total_value_eur', 'company_id'])
 
-                        # Бърз Python филтър за ускоряване
                         existing_fingerprints = set()
                         if not df_pp.empty and 'event_date' in df_pp.columns:
                             db_cmp = df_pp['company_code'].astype(str).str.strip().str.upper()
@@ -910,7 +923,6 @@ if page == "📊 ПП - Дашборд":
                         if df_final.empty:
                             st.info("⚠️ Според бързия филтър всички тези данни вече са качени в базата! Няма нови записи.")
                         else:
-                            # --- НОВОТО БРОНИРАНО КАЧВАНЕ (РЕД ПО РЕД) ---
                             records = df_final.to_dict(orient='records')
                             total_records = len(records)
                             success_count = 0
@@ -925,7 +937,6 @@ if page == "📊 ПП - Дашборд":
                                 except Exception:
                                     pass
                                 
-                                # Обновяваме визуалния статус
                                 progress_pct = (i + 1) / total_records
                                 progress_bar.progress(progress_pct, text=f"Проверка и запис: {i + 1} от {total_records}...")
                             
@@ -1111,12 +1122,27 @@ elif page == "📝 Регистър Оплаквания (РО)":
                             "client_action_needed": client_action_needed, "description": description,
                             "current_status": "Чака заключение и препоръка"
                         }
-                        supabase.table("complaints").insert(new_record).execute()
-                        st.success(f"✅ Картонът е създаден успешно! Можете да го отворите от таблицата 'Последни 20'.")
+                        inserted = supabase.table("complaints").insert(new_record).execute()
                         st.session_state.form_key += 1
+                        
+                        # --- МАГИЯТА ЗА АВТОМАТИЧНО ОТВАРЯНЕ НА НОВИЯ КАРТОН ---
+                        if inserted.data:
+                            st.session_state.auto_open_ticket_id = inserted.data[0]['id']
+                            
                         st.rerun()
                     except Exception as e:
                         st.error(f"Грешка при запис: {e}")
+
+    # --- СИСТЕМА ЗА АВТОМАТИЧНО ПРЕОТВАРЯНЕ НА ДИАЛОЗИТЕ (ГАРАНТИРА АКТУАЛНИ ДАННИ) ---
+    if 'auto_open_ticket_id' in st.session_state:
+        t_id = st.session_state['auto_open_ticket_id']
+        del st.session_state['auto_open_ticket_id']
+        try:
+            t_res = supabase.table("complaints").select("*").eq("id", t_id).execute()
+            if t_res.data:
+                show_ticket_details(t_res.data[0], df_complaints)
+        except Exception:
+            pass
 
 # ==========================================================
 # --- СТРАНИЦА 3: АНАЛИЗИ И СПРАВКИ (РО) ---
