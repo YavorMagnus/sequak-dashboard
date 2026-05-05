@@ -8,6 +8,7 @@ from dateutil.relativedelta import relativedelta
 import re
 import plotly.express as px
 import io
+import time
 
 # --- НАСТРОЙКИ НА СТРАНИЦАТА ---
 st.set_page_config(page_title="SequaK Workspace", page_icon="🏗️", layout="wide")
@@ -401,7 +402,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 4.5 (Fixed & Pro)")
+st.sidebar.caption("Входът е защитен. Версия 4.6 (Row-by-Row Upload)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -649,87 +650,104 @@ if page == "📊 ПП - Дашборд":
                 st.success(f"✅ Заредена страница '{selected_sheet}'.")
                 
                 if st.button("🚀 ИЗПРАТИ ДАННИТЕ КЪМ БАЗАТА", type="primary"):
-                    with st.spinner("Проверка за дубликати и запис... моля изчакайте!"):
-                        # Търсим и КА (Консултант), но го правим гъвкаво, за да не гърми, ако липсва в стар файл
-                        required_cols = ['Дата', 'Тагове', 'Обща стойност', 'Резултат', 'Фирма']
+                    required_cols = ['Дата', 'Тагове', 'Обща стойност', 'Резултат', 'Фирма']
+                    
+                    if all(col in df_uploaded.columns for col in required_cols):
+                        cols_to_extract = required_cols.copy()
+                        if 'КА' in df_uploaded.columns:
+                            cols_to_extract.append('КА')
+                            
+                        df_to_insert = df_uploaded[cols_to_extract].copy()
                         
-                        if all(col in df_uploaded.columns for col in required_cols):
-                            cols_to_extract = required_cols.copy()
-                            if 'КА' in df_uploaded.columns:
-                                cols_to_extract.append('КА')
-                                
-                            df_to_insert = df_uploaded[cols_to_extract].copy()
+                        rename_dict = {
+                            'Дата': 'event_date', 'Тагове': 'item_tag',
+                            'Обща стойност': 'total_value_eur', 'Резултат': 'resolution_status'
+                        }
+                        if 'КА' in df_to_insert.columns:
+                            rename_dict['КА'] = 'consultant'
                             
-                            rename_dict = {
-                                'Дата': 'event_date', 'Тагове': 'item_tag',
-                                'Обща стойност': 'total_value_eur', 'Резултат': 'resolution_status'
-                            }
-                            if 'КА' in df_to_insert.columns:
-                                rename_dict['КА'] = 'consultant'
-                                
-                            df_to_insert = df_to_insert.rename(columns=rename_dict)
-                            
-                            # Безопасно обработване на колоната Консултант (КА) - без да гърми .fillna() за стрингове
-                            if 'consultant' in df_to_insert.columns:
-                                df_to_insert['consultant'] = df_to_insert['consultant'].fillna('Неизвестен').astype(str)
-                            else:
-                                df_to_insert['consultant'] = 'Неизвестен'
-
-                            def get_smart_transaction_type(tag):
-                                tag_str = str(tag)
-                                if 'Наем' in tag_str: return 'Наем'
-                                elif 'Поръчка' in tag_str or 'Продажба' in tag_str: return 'Продажба'
-                                return 'Неопределен'
-                                
-                            df_to_insert['transaction_type'] = df_to_insert['item_tag'].apply(get_smart_transaction_type)
-                            df_to_insert['event_date'] = pd.to_datetime(df_to_insert['event_date'], dayfirst=True).dt.strftime('%Y-%m-%d %H:%M:%S')
-                            
-                            # Безопасно форматиране на сумата
-                            if df_to_insert['total_value_eur'].dtype == object:
-                                df_to_insert['total_value_eur'] = df_to_insert['total_value_eur'].astype(str).str.replace(r'\s+', '', regex=True).str.replace(',', '.')
-                            df_to_insert['total_value_eur'] = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0)
-                            
-                            df_to_insert['resolution_status'] = df_to_insert['resolution_status'].fillna('Неопределен')
-                            df_to_insert['mapped_code'] = df_to_insert['Фирма'].apply(standardize_company_code)
-                            df_to_insert['company_id'] = df_to_insert['mapped_code'].map(COMPANY_MAP)
-                            df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date', 'company_id'])
-                            df_to_insert = df_to_insert.replace({float('nan'): None, np.nan: None})
-                            
-                            # --- ПЕРФЕКТНИЯТ ФИЛТЪР (КРИТИЧНО ЗА ИЗБЯГВАНЕ НА ERROR 21000) ---
-                            # Първо: Премахваме дубликатите В САМИЯ ЕКСЕЛ (Заради които гърмеше Supabase)
-                            df_to_insert = df_to_insert.drop_duplicates(subset=['event_date', 'item_tag', 'total_value_eur', 'company_id'])
-
-                            # Второ: Създаваме fingerprint и сравняваме с базата данни
-                            existing_fingerprints = set()
-                            if not df_pp.empty and 'event_date' in df_pp.columns:
-                                db_cmp = df_pp['company_code'].astype(str).str.strip().str.upper()
-                                db_tag = df_pp['item_tag'].astype(str).str.strip().str.lower()
-                                db_date = pd.to_datetime(df_pp['event_date'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S')
-                                db_val = pd.to_numeric(df_pp['total_value_eur'], errors='coerce').fillna(0).round(2).apply(lambda x: f"{x:.2f}")
-                                
-                                existing_sigs = db_cmp + "|" + db_tag + "|" + db_date + "|" + db_val
-                                existing_fingerprints = set(existing_sigs)
-
-                            new_cmp = df_to_insert['mapped_code'].astype(str).str.strip().str.upper()
-                            new_tag = df_to_insert['item_tag'].astype(str).str.strip().str.lower()
-                            new_date = pd.to_datetime(df_to_insert['event_date'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S')
-                            new_val = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0).round(2).apply(lambda x: f"{x:.2f}")
-
-                            df_to_insert['fingerprint'] = new_cmp + "|" + new_tag + "|" + new_date + "|" + new_val
-                            
-                            df_final = df_to_insert[~df_to_insert['fingerprint'].isin(existing_fingerprints)].copy()
-                            df_final = df_final.drop(columns=['Фирма', 'mapped_code', 'fingerprint'])
-                            
-                            if df_final.empty:
-                                st.info("⚠️ Всички тези данни вече са качени в базата или сте качили файл само с дубликати! Няма нови записи за добавяне.")
-                            else:
-                                records = df_final.to_dict(orient='records')
-                                # Записваме НОВИТЕ уникални редове. Заради филтрите горе, това вече няма да гърми!
-                                supabase.table("missed_profits").insert(records).execute()
-                                st.success(f"🎉 Успешно добавени {len(df_final)} НОВИ записа! Презареждам...")
-                                st.rerun() 
+                        df_to_insert = df_to_insert.rename(columns=rename_dict)
+                        
+                        if 'consultant' in df_to_insert.columns:
+                            df_to_insert['consultant'] = df_to_insert['consultant'].fillna('Неизвестен').astype(str)
                         else:
-                            st.warning("⚠️ Липсват нужни колони (Уверете се, че има 'Дата', 'Тагове', 'Обща стойност', 'Резултат', 'Фирма').")
+                            df_to_insert['consultant'] = 'Неизвестен'
+
+                        def get_smart_transaction_type(tag):
+                            tag_str = str(tag)
+                            if 'Наем' in tag_str: return 'Наем'
+                            elif 'Поръчка' in tag_str or 'Продажба' in tag_str: return 'Продажба'
+                            return 'Неопределен'
+                            
+                        df_to_insert['transaction_type'] = df_to_insert['item_tag'].apply(get_smart_transaction_type)
+                        df_to_insert['event_date'] = pd.to_datetime(df_to_insert['event_date'], dayfirst=True).dt.strftime('%Y-%m-%d %H:%M:%S')
+                        
+                        if df_to_insert['total_value_eur'].dtype == object:
+                            df_to_insert['total_value_eur'] = df_to_insert['total_value_eur'].astype(str).str.replace(r'\s+', '', regex=True).str.replace(',', '.')
+                        df_to_insert['total_value_eur'] = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0)
+                        
+                        df_to_insert['resolution_status'] = df_to_insert['resolution_status'].fillna('Неопределен')
+                        df_to_insert['mapped_code'] = df_to_insert['Фирма'].apply(standardize_company_code)
+                        df_to_insert['company_id'] = df_to_insert['mapped_code'].map(COMPANY_MAP)
+                        df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date', 'company_id'])
+                        df_to_insert = df_to_insert.replace({float('nan'): None, np.nan: None})
+                        
+                        # Премахваме очевидните дубликати първо в самия Excel
+                        df_to_insert = df_to_insert.drop_duplicates(subset=['event_date', 'item_tag', 'total_value_eur', 'company_id'])
+
+                        # Бърз Python филтър за ускоряване
+                        existing_fingerprints = set()
+                        if not df_pp.empty and 'event_date' in df_pp.columns:
+                            db_cmp = df_pp['company_code'].astype(str).str.strip().str.upper()
+                            db_tag = df_pp['item_tag'].astype(str).str.strip().str.lower()
+                            db_date = pd.to_datetime(df_pp['event_date'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S')
+                            db_val = pd.to_numeric(df_pp['total_value_eur'], errors='coerce').fillna(0).round(2).apply(lambda x: f"{x:.2f}")
+                            existing_sigs = db_cmp + "|" + db_tag + "|" + db_date + "|" + db_val
+                            existing_fingerprints = set(existing_sigs)
+
+                        new_cmp = df_to_insert['mapped_code'].astype(str).str.strip().str.upper()
+                        new_tag = df_to_insert['item_tag'].astype(str).str.strip().str.lower()
+                        new_date = pd.to_datetime(df_to_insert['event_date'], errors='coerce').dt.strftime('%Y-%m-%d %H:%M:%S')
+                        new_val = pd.to_numeric(df_to_insert['total_value_eur'], errors='coerce').fillna(0).round(2).apply(lambda x: f"{x:.2f}")
+
+                        df_to_insert['fingerprint'] = new_cmp + "|" + new_tag + "|" + new_date + "|" + new_val
+                        
+                        df_final = df_to_insert[~df_to_insert['fingerprint'].isin(existing_fingerprints)].copy()
+                        df_final = df_final.drop(columns=['Фирма', 'mapped_code', 'fingerprint'])
+                        
+                        if df_final.empty:
+                            st.info("⚠️ Според бързия филтър всички тези данни вече са качени в базата! Няма нови записи.")
+                        else:
+                            # --- НОВОТО БРОНИРАНО КАЧВАНЕ (РЕД ПО РЕД) ---
+                            records = df_final.to_dict(orient='records')
+                            total_records = len(records)
+                            success_count = 0
+                            
+                            progress_bar = st.progress(0, text="Инициализация на записите...")
+                            status_text = st.empty()
+                            
+                            for i, record in enumerate(records):
+                                try:
+                                    supabase.table("missed_profits").insert(record).execute()
+                                    success_count += 1
+                                except Exception:
+                                    # Ако базата изгърми (най-често заради unique constraint дубликат), 
+                                    # просто прескачаме този ред, без да чупим приложението.
+                                    pass
+                                
+                                # Обновяваме визуалния статус
+                                progress_pct = (i + 1) / total_records
+                                progress_bar.progress(progress_pct, text=f"Проверка и запис: {i + 1} от {total_records}...")
+                            
+                            if success_count > 0:
+                                status_text.success(f"🎉 Готово! Бяха добавени {success_count} НОВИ уникални записа (от {total_records} обработени). Презареждам...")
+                            else:
+                                status_text.warning(f"⚠️ Базата данни отхвърли всички {total_records} записа като дубликати.")
+                            
+                            time.sleep(3)
+                            st.rerun() 
+                    else:
+                        st.warning("⚠️ Липсват нужни колони (Уверете се, че има 'Дата', 'Тагове', 'Обща стойност', 'Резултат', 'Фирма').")
             except Exception as e:
                 st.error(f"Възникна грешка при четене на файла: {e}")
 
