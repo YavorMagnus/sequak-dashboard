@@ -215,10 +215,11 @@ def show_ticket_details(ticket, df_complaints_param):
                 created_at_fmt = pd.to_datetime(record['created_at']).strftime('%d.%m.%Y %H:%M')
                 deadline_str = f" | Срок: <span style='color:#ff4b4b;'>{record['deadline_date']}</span>" if record.get('deadline_date') else ""
                 assigned_str = f" | Към: {record['assigned_to']}" if record.get('assigned_to') else ""
-                author = record.get('created_by', 'Системата')
+                author = record.get('created_by') or 'Системата'
                 
-                # ТУК Е МАГИЯТА ЗА НОВИТЕ РЕДОВЕ: Заменяме " | " с HTML нов ред
-                details_formatted = record.get('action_details', '').replace(' | ', '<br>🔹 ')
+                # ТУК Е МАГИЯТА ЗА НОВИТЕ РЕДОВЕ + ЗАЩИТА ОТ NULL:
+                raw_details = str(record.get('action_details') or "")
+                details_formatted = raw_details.replace(' | ', '<br>🔹 ')
                 
                 st.markdown(f"""
                 <div class="history-card">
@@ -425,8 +426,11 @@ def show_ticket_details(ticket, df_complaints_param):
         if history_data:
             for idx, rec in enumerate(history_data):
                 dt_fmt = pd.to_datetime(rec['created_at']).strftime('%d.%m.%Y %H:%M')
-                author = rec.get('created_by', 'Системата')
-                details_formatted = rec.get('action_details', '').replace(' | ', '<br>🔹 ')
+                author = rec.get('created_by') or 'Системата'
+                
+                # ЗАЩИТА ОТ NULL ПРИ МЕЙЛ БИЛДЪРА
+                raw_details = str(rec.get('action_details') or "")
+                details_formatted = raw_details.replace(' | ', '<br>🔹 ')
                 
                 col_data_h, col_chk_h = st.columns([11, 1])
                 with col_data_h:
@@ -490,8 +494,11 @@ def show_ticket_details(ticket, df_complaints_param):
             html_content += """<h4 style="color: #111111; border-bottom: 2px solid #cccccc; padding-bottom: 5px; margin-top: 20px;">Хронология на действията</h4>"""
             for rec in selected_history:
                 dt_fmt = pd.to_datetime(rec['created_at']).strftime('%d.%m.%Y %H:%M')
-                author = rec.get('created_by', 'Системата')
-                details_html_email = rec.get('action_details', '').replace(' | ', '<br>🔹 ')
+                author = rec.get('created_by') or 'Системата'
+                
+                # ЗАЩИТА ОТ NULL В HTML МЕЙЛА
+                raw_details_email = str(rec.get('action_details') or "")
+                details_html_email = raw_details_email.replace(' | ', '<br>🔹 ')
                 
                 html_content += f"""
                 <div style="margin-bottom: 10px; padding-left: 10px; border-left: 3px solid #FFD700; font-size: 13px;">
@@ -600,7 +607,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 5.7 (History UI & Audit)")
+st.sidebar.caption("Входът е защитен. Версия 5.8 (Hotfix: History UI)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
