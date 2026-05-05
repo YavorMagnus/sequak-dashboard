@@ -311,7 +311,7 @@ def show_ticket_details(ticket, df_complaints_param):
                 full_details = f"{action_text}. Детайли: {field_details}" if field_details else action_text
                 supabase.table("complaint_history").insert({
                     "complaint_id": ticket['id'], "action_type": "Назначена стъпка", "action_details": full_details,
-                    "assigned_to": assignee if assignee != "Избери... " else None, "deadline_date": str(deadline) if deadline else None,
+                    "assigned_to": assignee if assignee != "Избери..." else None, "deadline_date": str(deadline) if deadline else None,
                     "created_by": st.session_state.username
                 }).execute()
                 supabase.table("complaints").update({"current_status": next_status, "current_deadline": str(deadline) if deadline else None}).eq("id", ticket['id']).execute()
@@ -404,7 +404,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 4.6 (Pro-Fix)")
+st.sidebar.caption("Входът е защитен. Версия 4.6 (Pro-Fix2)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -421,7 +421,6 @@ if page == "📊 ПП - Дашборд":
             if df_pp['event_date'].dt.tz is not None:
                 df_pp['event_date'] = df_pp['event_date'].dt.tz_localize(None)
                 
-            # КОРИГИРАНА ЛОГИКА ЗА ЧЕТЕНЕ НА 'consultant'
             if 'consultant' not in df_pp.columns:
                 df_pp['consultant'] = 'Неизвестен'
             else:
@@ -463,7 +462,6 @@ if page == "📊 ПП - Дашборд":
                 total_count = len(df_kpi)
                 avg_eur = total_eur / total_count if total_count > 0 else 0
                 
-                # Изчисления за пазарния интерес
                 total_all_searches = len(df_filtered)
                 service_rate = ((total_all_searches - total_count) / total_all_searches * 100) if total_all_searches > 0 else 0
                 top_tag_overall = df_filtered['clean_machine'].mode()[0] if not df_filtered.empty else "-"
@@ -557,13 +555,11 @@ if page == "📊 ПП - Дашборд":
 
                 with tab_consultants:
                     if not df_filtered.empty and 'consultant' in df_filtered.columns:
-                        # Групиране по консултант (КА)
                         cons_group = df_filtered.groupby('consultant').agg(
                             total_calls=('resolution_status', 'count'),
                             missed_calls=('safe_status_kpi', lambda x: x.isin(['отказва се', 'нямаме наличност']).sum())
                         ).reset_index()
                         
-                        # Премахваме празни или невалидни
                         cons_group = cons_group[(cons_group['total_calls'] > 0) & (cons_group['consultant'] != 'Неизвестен')]
                         
                         if not cons_group.empty:
@@ -663,11 +659,9 @@ if page == "📊 ПП - Дашборд":
                 
                 if st.button("🚀 ИЗПРАТИ ДАННИТЕ КЪМ БАЗАТА", type="primary"):
                     with st.spinner("Проверка за дубликати и запис... моля изчакайте!"):
-                        # ТУК ДОБАВЯМЕ "КА"
                         required_cols = ['Дата', 'Тагове', 'Обща стойност', 'Резултат', 'Фирма', 'КА']
                         if all(col in df_uploaded.columns for col in required_cols):
                             df_to_insert = df_uploaded[required_cols].copy()
-                            # ПРЕИМЕНУВАМЕ "КА" НА consultant
                             df_to_insert = df_to_insert.rename(columns={
                                 'Дата': 'event_date', 'Тагове': 'item_tag',
                                 'Обща стойност': 'total_value_eur', 'Резултат': 'resolution_status',
@@ -693,7 +687,6 @@ if page == "📊 ПП - Дашборд":
                             df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date', 'company_id'])
                             df_to_insert = df_to_insert.replace({float('nan'): None, np.nan: None})
                             
-                            # --- ВЪЗСТАНОВЕН ПЕРФЕКТЕН ФИЛТЪР НА ПОТРЕБИТЕЛЯ ---
                             existing_fingerprints = set()
                             if not df_pp.empty and 'event_date' in df_pp.columns:
                                 db_cmp = df_pp['company_code'].astype(str).str.strip().str.upper()
@@ -711,7 +704,12 @@ if page == "📊 ПП - Дашборд":
 
                             df_to_insert['fingerprint'] = new_cmp + "|" + new_tag + "|" + new_date + "|" + new_val
                             
+                            # 1. Твоят оригинален филтър
                             df_to_insert = df_to_insert.drop_duplicates(subset=['fingerprint'])
+                            
+                            # 2. НОВИЯТ ЩИТ: Премахва всичко, което може да предизвика конфликт в една транзакция (грешка 21000)
+                            df_to_insert = df_to_insert.drop_duplicates(subset=['event_date', 'item_tag', 'total_value_eur', 'company_id'])
+                            
                             df_final = df_to_insert[~df_to_insert['fingerprint'].isin(existing_fingerprints)].copy()
                             df_final = df_final.drop(columns=['Фирма', 'mapped_code', 'fingerprint'])
                             
@@ -719,8 +717,8 @@ if page == "📊 ПП - Дашборд":
                                 st.info("⚠️ Всички тези данни вече са качени в базата! Няма нови записи за добавяне.")
                             else:
                                 records = df_final.to_dict(orient='records')
-                                # Тук разчитаме на upsert, за да се възползваме и от SQL правилото като втори щит
-                                supabase.table("missed_profits").upsert(records, on_conflict="event_date, item_tag, total_value_eur, company_id").execute()
+                                # Без излишни интервали в on_conflict за всеки случай
+                                supabase.table("missed_profits").upsert(records, on_conflict="event_date,item_tag,total_value_eur,company_id").execute()
                                 st.success(f"🎉 Успешно добавени {len(df_final)} НОВИ записа! Презареждам...")
                                 st.rerun() 
                         else:
