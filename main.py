@@ -298,19 +298,30 @@ def show_ticket_details(ticket, df_complaints_param):
                         st.session_state.auto_open_ticket_id = ticket['id']
                         st.rerun()
             else:
+                # ЗАКЛЮЧЕНИЕ С ПОЛЕ ЗА КОМЕНТАР
                 new_conc = st.selectbox("Заключение контролинг", ["Избери..."] + CONCLUSIONS, key=f"nc_{ticket['id']}")
+                conc_comment = st.text_input("Обосновка / Коментар към заключението (незадължително)", max_chars=500, key=f"cc_conc_{ticket['id']}")
+                st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+                
+                # ПРЕПОРЪКА С ПОЛЕ ЗА КОМЕНТАР
                 new_rec = st.selectbox("Препоръка контролинг", ["Избери..."] + RECOMMENDATIONS, key=f"nr_{ticket['id']}")
-                
                 field_details = ""
-                internal_comment = ""
-                
+                rec_comment = ""
                 if new_rec == "Проверка (поле)":
                     field_details = st.text_input("Какво точно ще се проверява?", max_chars=100, key=f"fd_{ticket['id']}")
                 else:
-                    internal_comment = st.text_area("Коментар към действието (незадължително)", max_chars=500, key=f"ic_{ticket['id']}")
-                    
-                assignee = st.selectbox("Възложено на (Роля)", ["Избери..."] + ROLES_LIST, key=f"as_{ticket['id']}")
-                deadline = st.date_input("Ръчен срок (Край до)", value=None, key=f"dl_{ticket['id']}")
+                    rec_comment = st.text_input("Коментар към препоръката (незадължително)", max_chars=500, key=f"ic_{ticket['id']}")
+                st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+                
+                # ВЪЗЛАГАНЕ С ПОЛЕ ЗА КОМЕНТАР И СРОК
+                col_as1, col_as2 = st.columns(2)
+                with col_as1:
+                    assignee = st.selectbox("Възложено на (Роля)", ["Избери..."] + ROLES_LIST, key=f"as_{ticket['id']}")
+                with col_as2:
+                    deadline = st.date_input("Ръчен срок (Край до)", value=None, key=f"dl_{ticket['id']}")
+                assignee_comment = st.text_input("Указания / Коментар към изпълнителя (незадължително)", max_chars=500, key=f"ac_ass_{ticket['id']}")
+                
+                st.markdown("<br>", unsafe_allow_html=True)
                 
                 col_btn1, col_btn2 = st.columns(2)
                 with col_btn1:
@@ -324,14 +335,20 @@ def show_ticket_details(ticket, df_complaints_param):
                     elif new_rec != "Проверка (поле)" and assignee == "Избери...": st.error("Моля, изберете на кого възлагате изпълнението (Роля)!")
                     else:
                         next_status = "Чака проверка" if new_rec == "Проверка (поле)" else "Чака приключване"
-                        action_text = f"Заключение: {new_conc} | Препоръка: {new_rec}"
                         
-                        if field_details:
-                            full_details = f"{action_text}. Детайли: {field_details}"
-                        elif internal_comment:
-                            full_details = f"{action_text}. Коментар: {internal_comment}"
-                        else:
-                            full_details = action_text
+                        # Интелигентно формиране на текста за базата данни, за да е четим
+                        conc_text = f"Заключение: {new_conc}"
+                        if conc_comment: conc_text += f" [{conc_comment}]"
+                            
+                        rec_text = f"Препоръка: {new_rec}"
+                        if new_rec == "Проверка (поле)" and field_details:
+                            rec_text += f" [Обект: {field_details}]"
+                        elif rec_comment:
+                            rec_text += f" [{rec_comment}]"
+                            
+                        full_details = f"{conc_text} | {rec_text}"
+                        if assignee_comment:
+                            full_details += f" | Указания към изпълнител: {assignee_comment}"
                             
                         supabase.table("complaint_history").insert({
                             "complaint_id": ticket['id'], "action_type": "Назначена стъпка", "action_details": full_details,
@@ -344,8 +361,6 @@ def show_ticket_details(ticket, df_complaints_param):
                         
                 if close_ticket:
                     close_details = "Сигналът е приключен."
-                    if internal_comment:
-                        close_details += f" Коментар: {internal_comment}"
                     supabase.table("complaints").update({"current_status": "Приключено", "current_deadline": None}).eq("id", ticket['id']).execute()
                     supabase.table("complaint_history").insert({"complaint_id": ticket['id'], "action_type": "Сигналът е приключен", "action_details": close_details, "created_by": st.session_state.username}).execute()
                     st.session_state.auto_open_ticket_id = ticket['id']
@@ -575,7 +590,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 5.5 (Keep Ticket Open & Comments)")
+st.sidebar.caption("Входът е защитен. Версия 5.6 (Full Comment Fields)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -642,7 +657,7 @@ if page == "📊 ПП - Дашборд":
             col_ch1, col_ch2 = st.columns([1.5, 1])
             
             with col_ch1:
-                st.subheader("📑 Анализ по Статус / Фирми")
+                st.subheader("📑 Анали по Статус / Фирми")
                 tab_table, tab_chart = st.tabs(["📊 Детайли по Статус", "📈 Обща Графика"])
                 
                 with tab_table:
