@@ -32,7 +32,7 @@ st.markdown("""
     .client-stream h4 { color: #00aaff; margin-top: 0; }
     .analytic-card { background-color: #1e1e1e; padding: 20px; border-radius: 8px; border-top: 3px solid #FFD700; margin-bottom: 20px; }
     
-    /* Стилизиране на таблиците в дашборда и агресивен опит за бели заглавия */
+    /* Стилизиране на таблиците в дашборда */
     [data-testid="stDataFrame"] { background-color: #1e1e1e; border-radius: 8px; }
     th, [data-testid="stDataFrame"] th, .stDataFrame div[data-testid="stColumnHeader"] span { color: #FFFFFF !important; }
     
@@ -42,6 +42,14 @@ st.markdown("""
     /* Стилизиране за Email Builder UI */
     .email-builder-row { background-color: #1e1e1e; padding: 15px; border-radius: 6px; border: 1px solid #444; margin-bottom: 8px; display: flex; align-items: center;}
     .email-preview-box { background-color: #ffffff; color: #000000; padding: 20px; border-radius: 8px; border: 2px dashed #00aaff; margin-top: 20px; user-select: all; }
+    
+    /* Канбан Карти */
+    .kanban-card { background-color: #2a2a2a; border-left: 5px solid #FFD700; padding: 15px; border-radius: 6px; margin-bottom: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
+    .kanban-card.overdue { border-left-color: #ff4b4b; background-color: #3a1c1c; }
+    .kanban-card.dispute { border-left-color: #00aaff; }
+    .kanban-title { font-size: 1.1em; font-weight: bold; margin-bottom: 5px; color: #ffffff; }
+    .kanban-meta { font-size: 0.85em; color: #aaaaaa; margin-bottom: 8px; }
+    .kanban-detail { font-size: 0.9em; margin-bottom: 5px; line-height: 1.3; color: #eeeeee; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -62,6 +70,7 @@ if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_role = None
     st.session_state.username = None
+    st.session_state.alerts_dismissed = False # Флаг за пред-началния екран
 
 if not st.session_state.logged_in:
     st.markdown("<br><br>", unsafe_allow_html=True)
@@ -83,6 +92,7 @@ if not st.session_state.logged_in:
                         st.session_state.logged_in = True
                         st.session_state.user_role = user_data['role']
                         st.session_state.username = user_data['username']
+                        st.session_state.alerts_dismissed = False
                         st.rerun()
                     else:
                         st.error("Грешен потребител или парола!")
@@ -168,6 +178,59 @@ def get_related_signals(ticket, df_complaints):
     
     return df_complaints[mask & match_cond]
 
+# ==========================================================
+# --- ПРЕД-НАЧАЛЕН ЕКРАН (АЛАРМИ ЗА АДМИН) ---
+# ==========================================================
+# Този блок се изпълнява преди да се зареди страничното меню, ако има просрочия
+if st.session_state.user_role == "Администратор" and not st.session_state.alerts_dismissed:
+    try:
+        # Изтегляме само активните сигнали
+        res_active = supabase.table("complaints").select("*, companies(code)").not_.in_("current_status", TERMINAL_STATUSES).execute()
+        df_active_alerts = pd.DataFrame(res_active.data)
+        
+        overdue_tickets = []
+        if not df_active_alerts.empty:
+            df_active_alerts['Фирма'] = df_active_alerts['companies'].apply(lambda x: x.get('code', '') if isinstance(x, dict) else '')
+            for _, row in df_active_alerts.iterrows():
+                dl_val = row.get('current_deadline')
+                if pd.notna(dl_val):
+                    dt_obj = pd.to_datetime(dl_val, errors='coerce')
+                    if pd.notna(dt_obj) and dt_obj.date() < datetime.date.today():
+                        overdue_tickets.append(row)
+        
+        if len(overdue_tickets) > 0:
+            st.markdown("<h1 style='color: #ff4b4b; text-align: center;'>🚨 ВНИМАНИЕ: ПРОСРОЧЕНИ СИГНАЛИ! 🚨</h1>", unsafe_allow_html=True)
+            st.markdown(f"<h4 style='text-align: center;'>Имате <b>{len(overdue_tickets)}</b> активни сигнала с изтекъл срок, които изискват вашето внимание.</h4>", unsafe_allow_html=True)
+            st.markdown("---")
+            
+            for tkt in overdue_tickets:
+                col1, col2, col3 = st.columns([4, 2, 1])
+                dt_str = pd.to_datetime(tkt['event_datetime']).strftime('%d.%m.%Y')
+                col1.markdown(f"**Клиент:** {tkt['client_name']} | **Фирма:** {tkt['Фирма']}")
+                col2.markdown(f"<span style='color: #ff4b4b;'>Срок: {tkt['current_deadline']}</span> | Статус: {tkt['current_status']}", unsafe_allow_html=True)
+                with col3:
+                    if st.button("Отвори Картона", key=f"alert_btn_{tkt['id']}", use_container_width=True):
+                        st.session_state.auto_open_ticket_id = tkt['id']
+                        st.session_state.alerts_dismissed = True # Автоматично преминаваме, ако отворим картон
+                        st.rerun()
+                st.divider()
+                
+            st.markdown("<br><br>", unsafe_allow_html=True)
+            if st.button("✅ РАЗБРАХ, ПРОДЪЛЖИ КЪМ РАБОТНОТО ПРОСТРАНСТВО", type="primary", use_container_width=True):
+                st.session_state.alerts_dismissed = True
+                st.rerun()
+            
+            st.stop() # Спираме изпълнението на останалия код, докато не се кликне бутона
+        else:
+            # Ако няма просрочени, автоматично пропускаме екрана
+            st.session_state.alerts_dismissed = True
+    except Exception as e:
+        # В случай на грешка с базата, пропускаме пред-началния екран за да не блокираме работата
+        st.session_state.alerts_dismissed = True
+
+# ==========================================================
+# --- ДИАЛОГ: КАРТОН НА СИГНАЛА ---
+# ==========================================================
 @st.dialog("Картон на сигнала", width="large")
 def show_ticket_details(ticket, df_complaints_param):
     
@@ -217,7 +280,6 @@ def show_ticket_details(ticket, df_complaints_param):
                 assigned_str = f" | Към: {record['assigned_to']}" if record.get('assigned_to') else ""
                 author = record.get('created_by') or 'Системата'
                 
-                # ТУК Е МАГИЯТА ЗА НОВИТЕ РЕДОВЕ + ЗАЩИТА ОТ NULL:
                 raw_details = str(record.get('action_details') or "")
                 details_formatted = raw_details.replace(' | ', '<br>🔹 ')
                 
@@ -304,12 +366,10 @@ def show_ticket_details(ticket, df_complaints_param):
                         st.session_state.auto_open_ticket_id = ticket['id']
                         st.rerun()
             else:
-                # ЗАКЛЮЧЕНИЕ С ПОЛЕ ЗА КОМЕНТАР
                 new_conc = st.selectbox("Заключение контролинг", ["Избери..."] + CONCLUSIONS, key=f"nc_{ticket['id']}")
                 conc_comment = st.text_input("Обосновка / Коментар към заключението (незадължително)", max_chars=500, key=f"cc_conc_{ticket['id']}")
                 st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
                 
-                # ПРЕПОРЪКА С ПОЛЕ ЗА КОМЕНТАР
                 new_rec = st.selectbox("Препоръка контролинг", ["Избери..."] + RECOMMENDATIONS, key=f"nr_{ticket['id']}")
                 field_details = ""
                 rec_comment = ""
@@ -319,7 +379,6 @@ def show_ticket_details(ticket, df_complaints_param):
                     rec_comment = st.text_input("Коментар към препоръката (незадължително)", max_chars=500, key=f"ic_{ticket['id']}")
                 st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
                 
-                # ВЪЗЛАГАНЕ С ПОЛЕ ЗА КОМЕНТАР И СРОК
                 col_as1, col_as2 = st.columns(2)
                 with col_as1:
                     assignee = st.selectbox("Възложено на (Роля)", ["Избери..."] + ROLES_LIST, key=f"as_{ticket['id']}")
@@ -396,7 +455,6 @@ def show_ticket_details(ticket, df_complaints_param):
         with col_data_1:
             st.markdown(f"**Сигнал от: {ticket.get('client_name', 'Неизвестен')}**")
             st.caption(f"Дата: {ticket.get('event_datetime', '')} | Канал: {ticket.get('channel', '')} | Касае: {ticket.get('case_type', '')}")
-            
             sc1, sc2 = st.columns(2)
             sc1.write(f"Телефон: {ticket.get('client_phone', '-')}")
             sc1.write(f"Имейл: {ticket.get('client_email', '-')}")
@@ -428,7 +486,6 @@ def show_ticket_details(ticket, df_complaints_param):
                 dt_fmt = pd.to_datetime(rec['created_at']).strftime('%d.%m.%Y %H:%M')
                 author = rec.get('created_by') or 'Системата'
                 
-                # ЗАЩИТА ОТ NULL ПРИ МЕЙЛ БИЛДЪРА
                 raw_details = str(rec.get('action_details') or "")
                 details_formatted = raw_details.replace(' | ', '<br>🔹 ')
                 
@@ -448,11 +505,9 @@ def show_ticket_details(ticket, df_complaints_param):
         else:
             st.write("Няма действия в хронологията.")
             
-        # ==========================================
-        # ГЕНЕРИРАНЕ НА КРАСИВ HTML ЗА ИМЕЙЛ
-        # ==========================================
+        # HTML МЕЙЛ
         st.markdown("### 👁️ Предварителен преглед на мейла")
-        st.caption("👇 **МАРКИРАЙ С МИШКАТА рамката по-долу, натисни Ctrl+C и пейстни (Ctrl+V) директно в Outlook.** Цветовете и таблиците ще се запазят!")
+        st.caption("👇 **МАРКИРАЙ С МИШКАТА рамката по-долу, натисни Ctrl+C и пейстни (Ctrl+V) директно в Outlook.**")
         
         html_content = f"""
         <div style="font-family: 'Segoe UI', Arial, sans-serif; color: #333333; max-width: 800px; background-color: #ffffff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;">
@@ -495,8 +550,6 @@ def show_ticket_details(ticket, df_complaints_param):
             for rec in selected_history:
                 dt_fmt = pd.to_datetime(rec['created_at']).strftime('%d.%m.%Y %H:%M')
                 author = rec.get('created_by') or 'Системата'
-                
-                # ЗАЩИТА ОТ NULL В HTML МЕЙЛА
                 raw_details_email = str(rec.get('action_details') or "")
                 details_html_email = raw_details_email.replace(' | ', '<br>🔹 ')
                 
@@ -592,10 +645,8 @@ def show_company_tickets(company_code, df_complaints):
 # ==========================================================
 st.sidebar.title("🏗️ SequaK Меню")
 
-available_pages = ["📊 ПП - Дашборд", "📈 Анализи и Справки (РО)"]
-if st.session_state.user_role == "Администратор":
-    available_pages.insert(1, "📝 Регистър Оплаквания (РО)")
-
+# Всички виждат трите менюта (РО вече е общодостъпно)
+available_pages = ["📊 ПП - Дашборд", "📝 Регистър Оплаквания (РО)", "📈 Анализи и Справки (РО)"]
 page = st.sidebar.radio("Изберете модул:", available_pages)
 
 st.sidebar.markdown("---")
@@ -607,7 +658,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 5.8 (Hotfix: History UI)")
+st.sidebar.caption("Входът е защитен. Версия 6.0 (Kanban + Alerts)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -652,13 +703,11 @@ if page == "📊 ПП - Дашборд":
             if 'resolution_status' in df_filtered.columns:
                 df_filtered['safe_status_kpi'] = df_filtered['resolution_status'].astype(str).str.lower().str.strip()
                 valid_statuses = ['отказва се', 'нямаме наличност']
-                
                 df_kpi = df_filtered[df_filtered['safe_status_kpi'].isin(valid_statuses)]
                 
                 total_eur = df_kpi['total_value_eur'].sum() if not df_kpi.empty else 0
                 total_count = len(df_kpi)
                 avg_eur = total_eur / total_count if total_count > 0 else 0
-                
                 all_searches_count = len(df_filtered)
             else:
                 total_eur, total_count, avg_eur, all_searches_count = 0, 0, 0, 0
@@ -681,13 +730,10 @@ if page == "📊 ПП - Дашборд":
                     if not df_filtered.empty and 'resolution_status' in df_filtered.columns:
                         df_status = df_filtered.copy()
                         df_status['safe_status'] = df_status['resolution_status'].astype(str).str.lower().str.strip()
-                        
                         df_status['refused_count'] = df_status['safe_status'].str.contains('отказва се', na=False).astype(int)
                         df_status['refused_sum'] = np.where(df_status['safe_status'].str.contains('отказва се', na=False), df_status['total_value_eur'], 0)
-                        
                         df_status['no_stock_count'] = df_status['safe_status'].str.contains('нямаме наличност', na=False).astype(int)
                         df_status['no_stock_sum'] = np.where(df_status['safe_status'].str.contains('нямаме наличност', na=False), df_status['total_value_eur'], 0)
-                        
                         df_status['not_offered_count'] = df_status['safe_status'].str.contains('не предлагаме', na=False).astype(int)
 
                         status_summary = df_status.groupby('company_code')[
@@ -695,14 +741,10 @@ if page == "📊 ПП - Дашборд":
                         ].sum().reset_index()
                         
                         status_summary.columns = [
-                            'Фирма', 
-                            'Отказва се (Бр.)', 'Отказва се (€)', 
-                            'Няма наличност (Бр.)', 'Няма наличност (€)', 
-                            'Не предлагаме (Бр.)'
+                            'Фирма', 'Отказва се (Бр.)', 'Отказва се (€)', 
+                            'Няма наличност (Бр.)', 'Няма наличност (€)', 'Не предлагаме (Бр.)'
                         ]
-                        
                         status_summary = status_summary.sort_values(by='Няма наличност (€)', ascending=False)
-                        
                         status_summary['Общо (Бр.)'] = status_summary['Отказва се (Бр.)'] + status_summary['Няма наличност (Бр.)'] + status_summary['Не предлагаме (Бр.)']
                         status_summary['Общо (€)'] = status_summary['Отказва се (€)'] + status_summary['Няма наличност (€)']
                         
@@ -720,9 +762,7 @@ if page == "📊 ПП - Дашборд":
                         status_summary = pd.concat([total_row, status_summary], ignore_index=True)
 
                         styled_status = status_summary.style.format({
-                            'Отказва се (€)': '€ {:,.2f}',
-                            'Няма наличност (€)': '€ {:,.2f}',
-                            'Общо (€)': '€ {:,.2f}'
+                            'Отказва се (€)': '€ {:,.2f}', 'Няма наличност (€)': '€ {:,.2f}', 'Общо (€)': '€ {:,.2f}'
                         }).set_properties(**{'color': '#FFFFFF'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white !important')]}])
                         
                         st.dataframe(styled_status, use_container_width=True, hide_index=True)
@@ -747,8 +787,7 @@ if page == "📊 ПП - Дашборд":
                 status_filter = st.radio(
                     "Срез по статус на обаждането:",
                     ["Всички", "Информира се", "Отказва се", "Нямаме наличност", "Не предлагаме"],
-                    horizontal=True,
-                    index=3
+                    horizontal=True, index=3
                 )
 
                 if status_filter != "Всички":
@@ -781,22 +820,13 @@ if page == "📊 ПП - Дашборд":
                 with tab_mas: show_top_15(df_top15_base[df_top15_base['company_code'] == 'MAS'], status_filter)
                 with tab_cmx: show_top_15(df_top15_base[df_top15_base['company_code'] == 'CMX'], status_filter)
             
-            # --- НОВА СЕКЦИЯ: АНАЛИЗ ПО КОНСУЛТАНТИ ---
             st.markdown("---")
             st.subheader("👨‍💼 Анализ на отказите по консултанти")
-            
-            cons_comp_filter = st.radio(
-                "Избор на фирма (за анализ на консултанти):",
-                ["Всички", "REN", "CIM", "MAS", "CMX"],
-                horizontal=True,
-                key="cons_comp_filter"
-            )
+            cons_comp_filter = st.radio("Избор на фирма (за анализ на консултанти):", ["Всички", "REN", "CIM", "MAS", "CMX"], horizontal=True, key="cons_comp_filter")
             
             if cons_comp_filter != "Всички":
-                if cons_comp_filter == "CIM":
-                    df_cons_base = df_filtered[df_filtered['company_code'].isin(['CIM', 'RCD'])].copy()
-                else:
-                    df_cons_base = df_filtered[df_filtered['company_code'] == cons_comp_filter].copy()
+                if cons_comp_filter == "CIM": df_cons_base = df_filtered[df_filtered['company_code'].isin(['CIM', 'RCD'])].copy()
+                else: df_cons_base = df_filtered[df_filtered['company_code'] == cons_comp_filter].copy()
             else:
                 df_cons_base = df_filtered.copy()
             
@@ -804,10 +834,7 @@ if page == "📊 ПП - Дашборд":
                 cons_total = df_cons_base.groupby('consultant').size().reset_index(name='Общо анализирани')
                 
                 df_refused = df_cons_base[df_cons_base['safe_status_kpi'].str.contains('отказва се', na=False)]
-                cons_refused = df_refused.groupby('consultant').agg(
-                    Отказва_се=('total_value_eur', 'count'),
-                    EUR_откази=('total_value_eur', 'sum')
-                ).reset_index()
+                cons_refused = df_refused.groupby('consultant').agg(Отказва_се=('total_value_eur', 'count'), EUR_откази=('total_value_eur', 'sum')).reset_index()
                 
                 df_problem = df_cons_base[df_cons_base['safe_status_kpi'].str.contains('проблем', na=False)]
                 cons_problem = df_problem.groupby('consultant').size().reset_index(name='Проблемни')
@@ -815,18 +842,12 @@ if page == "📊 ПП - Дашборд":
                 cons_stats = pd.merge(cons_total, cons_refused, on='consultant', how='left')
                 cons_stats = pd.merge(cons_stats, cons_problem, on='consultant', how='left').fillna(0)
                 
-                cons_stats = cons_stats.rename(columns={
-                    'consultant': 'Име на консултант',
-                    'Отказва_се': 'Отказва се',
-                    'EUR_откази': 'EUR откази'
-                })
-                
+                cons_stats = cons_stats.rename(columns={'consultant': 'Име на консултант', 'Отказва_се': 'Отказва се', 'EUR_откази': 'EUR откази'})
                 cons_stats['% откази'] = np.where(cons_stats['Общо анализирани'] > 0, (cons_stats['Отказва се'] / cons_stats['Общо анализирани']) * 100, 0)
                 cons_stats['% проблемни'] = np.where(cons_stats['Общо анализирани'] > 0, (cons_stats['Проблемни'] / cons_stats['Общо анализирани']) * 100, 0)
                 
                 cols_order = ['Име на консултант', 'Общо анализирани', 'Отказва се', '% откази', 'EUR откази', 'Проблемни', '% проблемни']
                 cons_stats = cons_stats[cols_order]
-                
                 cons_stats = cons_stats.sort_values(by=['EUR откази'], ascending=[False])
                 
                 hide_date = datetime.date(2026, 6, 1)
@@ -835,48 +856,32 @@ if page == "📊 ПП - Дашборд":
                     cons_stats = cons_stats.drop(columns=['Проблемни', '% проблемни'])
 
                 format_dict = {
-                    'Общо анализирани': '{:,.0f}',
-                    'Отказва се': '{:,.0f}',
-                    '% откази': '{:.1f} %',
-                    'EUR откази': '€ {:,.2f}'
+                    'Общо анализирани': '{:,.0f}', 'Отказва се': '{:,.0f}', '% откази': '{:.1f} %', 'EUR откази': '€ {:,.2f}'
                 }
-                
                 if 'Проблемни' in cons_stats.columns:
                     format_dict['Проблемни'] = '{:,.0f}'
                     format_dict['% проблемни'] = '{:.1f} %'
 
                 styled_cons = cons_stats.style.format(format_dict).set_properties(**{'color': '#FFFFFF'}).set_table_styles([{'selector': 'th', 'props': [('color', 'white !important')]}])
-                
                 st.dataframe(styled_cons, use_container_width=True, hide_index=True)
             else:
                 st.info("В базата няма информация за Консултанти ('КА') за избрания срез.")
 
-            # --- ЕКСПОРТ ---
+            # Експорт
             st.markdown("---")
             with st.expander("📥 Изтегляне на филтрираните данни (Excel)"):
                 st.write(f"Готови за изтегляне: **{len(df_filtered)}** записа (отговарящи на избрания по-горе период).")
-                
                 buffer_pp = io.BytesIO()
                 export_df_pp = df_filtered.copy()
-                
-                if 'companies' in export_df_pp.columns:
-                    export_df_pp = export_df_pp.drop(columns=['companies'])
-                
+                if 'companies' in export_df_pp.columns: export_df_pp = export_df_pp.drop(columns=['companies'])
                 with pd.ExcelWriter(buffer_pp, engine='openpyxl') as writer:
                     export_df_pp.to_excel(writer, index=False, sheet_name='Пропуснати_Ползи')
-                
-                st.download_button(
-                    label="💾 Изтегли като .xlsx",
-                    data=buffer_pp.getvalue(),
-                    file_name=f"SequaK_PP_{start_date}_to_{end_date}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary"
-                )
+                st.download_button(label="💾 Изтегли като .xlsx", data=buffer_pp.getvalue(), file_name=f"SequaK_PP_{start_date}_to_{end_date}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
 
     except Exception as e:
         st.error(f"Възникна грешка при зареждане на таблото: {e}")
 
-    # ОГРАНИЧЕНИЕ ЗА ВНОС: Само Администратор може да вижда този панел
+    # Само Администратор може да внася данни
     if st.session_state.user_role == "Администратор":
         st.markdown("---")
         st.header("📥 Внос на данни (Пропуснати ползи)")
@@ -890,27 +895,17 @@ if page == "📊 ПП - Дашборд":
                 
                 if st.button("🚀 ИЗПРАТИ ДАННИТЕ КЪМ БАЗАТА", type="primary"):
                     required_cols = ['Дата', 'Тагове', 'Обща стойност', 'Резултат', 'Фирма']
-                    
                     if all(col in df_uploaded.columns for col in required_cols):
                         cols_to_extract = required_cols.copy()
-                        if 'КА' in df_uploaded.columns:
-                            cols_to_extract.append('КА')
-                            
+                        if 'КА' in df_uploaded.columns: cols_to_extract.append('КА')
                         df_to_insert = df_uploaded[cols_to_extract].copy()
                         
-                        rename_dict = {
-                            'Дата': 'event_date', 'Тагове': 'item_tag',
-                            'Обща стойност': 'total_value_eur', 'Резултат': 'resolution_status'
-                        }
-                        if 'КА' in df_to_insert.columns:
-                            rename_dict['КА'] = 'consultant'
-                            
+                        rename_dict = {'Дата': 'event_date', 'Тагове': 'item_tag', 'Обща стойност': 'total_value_eur', 'Резултат': 'resolution_status'}
+                        if 'КА' in df_to_insert.columns: rename_dict['КА'] = 'consultant'
                         df_to_insert = df_to_insert.rename(columns=rename_dict)
                         
-                        if 'consultant' in df_to_insert.columns:
-                            df_to_insert['consultant'] = df_to_insert['consultant'].fillna('Неизвестен').astype(str)
-                        else:
-                            df_to_insert['consultant'] = 'Неизвестен'
+                        if 'consultant' in df_to_insert.columns: df_to_insert['consultant'] = df_to_insert['consultant'].fillna('Неизвестен').astype(str)
+                        else: df_to_insert['consultant'] = 'Неизвестен'
 
                         def get_smart_transaction_type(tag):
                             tag_str = str(tag)
@@ -930,7 +925,6 @@ if page == "📊 ПП - Дашборд":
                         df_to_insert['company_id'] = df_to_insert['mapped_code'].map(COMPANY_MAP)
                         df_to_insert = df_to_insert.dropna(subset=['item_tag', 'event_date', 'company_id'])
                         df_to_insert = df_to_insert.replace({float('nan'): None, np.nan: None})
-                        
                         df_to_insert = df_to_insert.drop_duplicates(subset=['event_date', 'item_tag', 'total_value_eur', 'company_id'])
 
                         existing_fingerprints = set()
@@ -988,7 +982,7 @@ if page == "📊 ПП - Дашборд":
 # --- СТРАНИЦА 2: РЕГИСТЪР ОПЛАКВАНИЯ (РО) ---
 # ==========================================================
 elif page == "📝 Регистър Оплаквания (РО)":
-    st.title("📝 Управление на Сигнали (РО) - Фаза 2")
+    st.title("📝 Управление на Сигнали (РО) - Фаза 4")
     
     if 'active_company' not in st.session_state:
         st.session_state.active_company = None
@@ -998,11 +992,17 @@ elif page == "📝 Регистър Оплаквания (РО)":
         df_complaints = pd.DataFrame(res.data)
         if not df_complaints.empty:
             df_complaints['Фирма'] = df_complaints['companies'].apply(lambda x: x.get('code', '') if isinstance(x, dict) else '')
+            
+        # За Канбана изтегляме и хронологията, за да вземем последните препоръки
+        hist_res = supabase.table("complaint_history").select("complaint_id, assigned_to, deadline_date, action_details, action_type").order("created_at", desc=True).limit(100000).execute()
+        df_hist_full = pd.DataFrame(hist_res.data)
+        
     except Exception as e:
         st.error(f"Грешка при връзка с DB: {e}")
         df_complaints = pd.DataFrame()
+        df_hist_full = pd.DataFrame()
         
-    tab_list, tab_new = st.tabs(["👁️ Птичи поглед (Дашборд)", "➕ Въвеждане на нов сигнал"])
+    tab_list, tab_kanban, tab_new = st.tabs(["👁️ Птичи поглед (Дашборд)", "📋 Канбан дъска", "➕ Въвеждане на нов сигнал"])
     
     with tab_list:
         st.markdown("### Активно следене на процеси по фирми")
@@ -1095,76 +1095,179 @@ elif page == "📝 Регистър Оплаквания (РО)":
                         st.markdown("<hr style='margin: 0.2em 0; opacity: 0.2'>", unsafe_allow_html=True)
         else:
             st.info("Все още няма регистрирани сигнали в базата данни.")
-            
-    with tab_new:
-        st.write("Форма за въвеждане на първичен картон от служител/кол център.")
+
+    # --- ТАБ КАНБАН ДЪСКА ---
+    with tab_kanban:
+        st.markdown("### Централизирано управление на активните процеси")
+        st.write("Тук виждате всички сигнали в процес на работа. Бутонът 'Отвори' гарантира запазване на одитната следа.")
+        
+        kb_comp_filter = st.radio("Покажи сигнали за фирма:", ["Всички"] + COMPANY_LIST, horizontal=True, key="kb_filter")
         st.markdown("---")
-
-        if "form_key" not in st.session_state: st.session_state.form_key = 0
-
-        with st.form(f"new_complaint_form_{st.session_state.form_key}"):
-            st.subheader("Основни данни")
-            col1, col2, col3, col4 = st.columns(4)
-            with col1: channel = st.selectbox("Канал на постъпване *", ["Телефон", "Email", "Чат", "Друго"])
-            with col2: company_selected = st.selectbox("Фирма *", COMPANY_LIST)
-            with col3: event_date = st.date_input("Дата на сигнала *")
-            with col4: event_time_str = st.text_input("Час (напр. 1430) *", placeholder="Въведете цифри...")
-
-            st.subheader("Данни за клиента")
-            col5, col6, col7, col8 = st.columns([2, 1, 1, 1])
-            with col5:
-                client_name = st.text_input("Име/Наименование *")
-                client_type = st.selectbox("Вид клиент", ["Юридическо лице", "Физическо лице", "Неизвестно"])
-            with col6:
-                client_phone = st.text_input("Телефон")
-                client_eik = st.text_input("ЕИК (за ЮЛ)")
-            with col7:
-                client_email = st.text_input("Email")
-                contract_number = st.text_input("Договор/Поръчка №", max_chars=20)
-            with col8:
-                client_action_needed = st.checkbox("Очаква ли се действие с клиента?", value=False)
+        
+        if not df_complaints.empty:
+            df_kb = df_complaints[~df_complaints['current_status'].isin(TERMINAL_STATUSES)].copy()
+            if kb_comp_filter != "Всички":
+                df_kb = df_kb[df_kb['Фирма'] == kb_comp_filter]
                 
-            st.subheader("Същност на проблема")
-            col9, col10 = st.columns(2)
-            with col9:
-                case_type = st.selectbox("Касае *", ["Наем", "Продажба", "Ремонт", "Друго"])
-                call_number = st.text_input("Номер на разговора (аудио запис)")
-            with col10:
-                machines = st.text_input("Машина/и", max_chars=100)
-                
-            description = st.text_area("Изложение на проблема *", height=120)
-            st.write("*Полетата със звезда са задължителни.*")
-            submit_button = st.form_submit_button("Запиши първичен картон", type="primary")
-
-            if submit_button:
-                formatted_time = parse_smart_time(event_time_str)
-                if not company_selected or not client_name or not description or not event_time_str:
-                    st.error("⚠️ Моля, попълнете задължителните полета!")
-                elif not formatted_time:
-                    st.error("⚠️ Невалиден час!")
-                else:
-                    try:
-                        company_id = COMPANY_MAP.get(company_selected)
-                        datetime_str = f"{event_date.strftime('%Y-%m-%d')} {formatted_time}"
-                        new_record = {
-                            "channel": channel, "event_datetime": datetime_str, "company_id": company_id,
-                            "client_name": client_name, "client_phone": client_phone, "client_email": client_email,
-                            "client_type": client_type, "client_eik": client_eik, "contract_number": contract_number,
-                            "case_type": case_type, "call_number": call_number, "machines": machines,
-                            "client_action_needed": client_action_needed, "description": description,
-                            "current_status": "Чака заключение и препоръка"
-                        }
-                        inserted = supabase.table("complaints").insert(new_record).execute()
-                        st.session_state.form_key += 1
-                        
-                        if inserted.data:
-                            st.session_state.auto_open_ticket_id = inserted.data[0]['id']
+            # Подготовка на речник с последната история за бързо търсене
+            latest_hist_dict = {}
+            if not df_hist_full.empty:
+                for cid in df_kb['id'].unique():
+                    comp_hist = df_hist_full[df_hist_full['complaint_id'] == cid]
+                    if not comp_hist.empty:
+                        last_record = comp_hist.iloc[0] # Тъй като вече е сортирано desc по created_at
+                        # Търсим конкретно "Назначена стъпка", за да хванем препоръката
+                        action_steps = comp_hist[comp_hist['action_type'] == 'Назначена стъпка']
+                        if not action_steps.empty:
+                            last_action = action_steps.iloc[0]
+                            # Опитваме да извадим само препоръката от стринга
+                            action_str = str(last_action.get('action_details', ''))
+                            rec_match = re.search(r"Препоръка:\s*(.*?)(?:\s*\||$)", action_str)
+                            rec_text = rec_match.group(1).strip() if rec_match else "Няма инфо"
                             
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Грешка при запис: {e}")
+                            latest_hist_dict[cid] = {
+                                'assignee': last_action.get('assigned_to') or "Не е посочен",
+                                'recommendation': rec_text
+                            }
+                        else:
+                            latest_hist_dict[cid] = {'assignee': "Не е посочен", 'recommendation': "Няма назначена стъпка"}
+                    else:
+                        latest_hist_dict[cid] = {'assignee': "Не е посочен", 'recommendation': "Няма история"}
 
-    # --- СИСТЕМА ЗА АВТОМАТИЧНО ПРЕОТВАРЯНЕ НА ДИАЛОЗИТЕ (ГАРАНТИРА АКТУАЛНИ ДАННИ) ---
+            k_col1, k_col2, k_col3 = st.columns(3)
+            
+            def render_kanban_card(tkt, column_obj):
+                cid = tkt['id']
+                client = tkt.get('client_name', 'Неизвестен')
+                comp_name = tkt.get('Фирма', '')
+                dt_str = pd.to_datetime(tkt.get('event_datetime')).strftime('%d.%m.%Y')
+                
+                is_overdue = False
+                dl_val = tkt.get('current_deadline')
+                if pd.notna(dl_val):
+                    dt_obj = pd.to_datetime(dl_val, errors='coerce')
+                    if pd.notna(dt_obj) and dt_obj.date() < datetime.date.today():
+                        is_overdue = True
+                        
+                in_dispute = tkt.get('client_action_needed', False)
+                
+                # Вземане на допълнителните данни
+                meta_info = latest_hist_dict.get(cid, {'assignee': 'Не е посочен', 'recommendation': 'Няма'})
+                assignee = meta_info['assignee']
+                rec = meta_info['recommendation']
+                dl_display = dl_val if pd.notna(dl_val) else "Няма"
+                
+                card_class = "kanban-card overdue" if is_overdue else "kanban-card dispute" if in_dispute else "kanban-card"
+                badge_dispute = " 🔵 [Диспут]" if in_dispute else ""
+                badge_overdue = " 🔴 [Просрочен]" if is_overdue else ""
+                
+                html_card = f"""
+                <div class="{card_class}">
+                    <div class="kanban-title">{client}{badge_dispute}{badge_overdue}</div>
+                    <div class="kanban-meta">{comp_name} | Дата: {dt_str}</div>
+                    <div class="kanban-detail"><strong>Отговорник:</strong> {assignee}</div>
+                    <div class="kanban-detail"><strong>Срок до:</strong> {dl_display}</div>
+                    <div class="kanban-detail"><strong>Действие:</strong> {rec}</div>
+                </div>
+                """
+                with column_obj:
+                    st.markdown(html_card, unsafe_allow_html=True)
+                    if st.button("Отвори", key=f"kb_btn_{cid}", use_container_width=True):
+                        show_ticket_details(tkt, df_complaints)
+
+            # Филтриране по колони
+            df_col1 = df_kb[df_kb['current_status'] == "Чака заключение и препоръка"]
+            df_col2 = df_kb[df_kb['current_status'] == "Чака проверка"]
+            df_col3 = df_kb[df_kb['current_status'] == "Чака приключване"]
+
+            with k_col1:
+                st.markdown(f"<h4 style='text-align: center; color: #aaaaaa;'>Чака заключ. / препоръка ({len(df_col1)})</h4>", unsafe_allow_html=True)
+                for _, r in df_col1.iterrows(): render_kanban_card(r.to_dict(), k_col1)
+            
+            with k_col2:
+                st.markdown(f"<h4 style='text-align: center; color: #ff9900;'>Чака проверка ({len(df_col2)})</h4>", unsafe_allow_html=True)
+                for _, r in df_col2.iterrows(): render_kanban_card(r.to_dict(), k_col2)
+                
+            with k_col3:
+                st.markdown(f"<h4 style='text-align: center; color: #00aaff;'>Чака приключване ({len(df_col3)})</h4>", unsafe_allow_html=True)
+                for _, r in df_col3.iterrows(): render_kanban_card(r.to_dict(), k_col3)
+
+        else:
+            st.info("Няма данни за визуализация на Канбан дъската.")
+
+    # --- ТАБ НОВ СИГНАЛ (Достъпно за всички с права за РО, но обикновено Админи) ---
+    with tab_new:
+        if st.session_state.user_role == "Администратор":
+            st.write("Форма за въвеждане на първичен картон от служител/кол център.")
+            st.markdown("---")
+
+            if "form_key" not in st.session_state: st.session_state.form_key = 0
+
+            with st.form(f"new_complaint_form_{st.session_state.form_key}"):
+                st.subheader("Основни данни")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1: channel = st.selectbox("Канал на постъпване *", ["Телефон", "Email", "Чат", "Друго"])
+                with col2: company_selected = st.selectbox("Фирма *", COMPANY_LIST)
+                with col3: event_date = st.date_input("Дата на сигнала *")
+                with col4: event_time_str = st.text_input("Час (напр. 1430) *", placeholder="Въведете цифри...")
+
+                st.subheader("Данни за клиента")
+                col5, col6, col7, col8 = st.columns([2, 1, 1, 1])
+                with col5:
+                    client_name = st.text_input("Име/Наименование *")
+                    client_type = st.selectbox("Вид клиент", ["Юридическо лице", "Физическо лице", "Неизвестно"])
+                with col6:
+                    client_phone = st.text_input("Телефон")
+                    client_eik = st.text_input("ЕИК (за ЮЛ)")
+                with col7:
+                    client_email = st.text_input("Email")
+                    contract_number = st.text_input("Договор/Поръчка №", max_chars=20)
+                with col8:
+                    client_action_needed = st.checkbox("Очаква ли се действие с клиента?", value=False)
+                    
+                st.subheader("Същност на проблема")
+                col9, col10 = st.columns(2)
+                with col9:
+                    case_type = st.selectbox("Касае *", ["Наем", "Продажба", "Ремонт", "Друго"])
+                    call_number = st.text_input("Номер на разговора (аудио запис)")
+                with col10:
+                    machines = st.text_input("Машина/и", max_chars=100)
+                    
+                description = st.text_area("Изложение на проблема *", height=120)
+                st.write("*Полетата със звезда са задължителни.*")
+                submit_button = st.form_submit_button("Запиши първичен картон", type="primary")
+
+                if submit_button:
+                    formatted_time = parse_smart_time(event_time_str)
+                    if not company_selected or not client_name or not description or not event_time_str:
+                        st.error("⚠️ Моля, попълнете задължителните полета!")
+                    elif not formatted_time:
+                        st.error("⚠️ Невалиден час!")
+                    else:
+                        try:
+                            company_id = COMPANY_MAP.get(company_selected)
+                            datetime_str = f"{event_date.strftime('%Y-%m-%d')} {formatted_time}"
+                            new_record = {
+                                "channel": channel, "event_datetime": datetime_str, "company_id": company_id,
+                                "client_name": client_name, "client_phone": client_phone, "client_email": client_email,
+                                "client_type": client_type, "client_eik": client_eik, "contract_number": contract_number,
+                                "case_type": case_type, "call_number": call_number, "machines": machines,
+                                "client_action_needed": client_action_needed, "description": description,
+                                "current_status": "Чака заключение и препоръка"
+                            }
+                            inserted = supabase.table("complaints").insert(new_record).execute()
+                            st.session_state.form_key += 1
+                            
+                            if inserted.data:
+                                st.session_state.auto_open_ticket_id = inserted.data[0]['id']
+                                
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Грешка при запис: {e}")
+        else:
+            st.warning("⚠️ Само Администратори имат права за създаване на нови сигнали.")
+
+    # --- СИСТЕМА ЗА АВТОМАТИЧНО ПРЕОТВАРЯНЕ НА ДИАЛОЗИТЕ ---
     if 'auto_open_ticket_id' in st.session_state:
         t_id = st.session_state['auto_open_ticket_id']
         del st.session_state['auto_open_ticket_id']
