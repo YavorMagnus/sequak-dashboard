@@ -9,6 +9,7 @@ import re
 import plotly.express as px
 import io
 import time
+import urllib.parse
 
 # --- НАСТРОЙКИ НА СТРАНИЦАТА ---
 st.set_page_config(page_title="SequaK Workspace", page_icon="🏗️", layout="wide")
@@ -221,106 +222,160 @@ def show_ticket_details(ticket, df_complaints_param):
         return
     elif current_status == "Приключено":
         st.success("✅ Този сигнал е ПРИКЛЮЧЕН.")
-        return
-
-    st.subheader("🤝 Комуникация с клиент (Външен процес)")
-    current_client_action = ticket.get('client_action_needed', False)
-    new_client_action = st.toggle("Извънреден диспут: Очаква се действие с клиента", value=current_client_action, key=f"tgl_{ticket['id']}")
-    
-    if new_client_action != current_client_action:
-        supabase.table("complaints").update({"client_action_needed": new_client_action}).eq("id", ticket['id']).execute()
-        action_text = "Активиран" if new_client_action else "Дезактивиран"
-        supabase.table("complaint_history").insert({
-            "complaint_id": ticket['id'],
-            "action_type": f"Диспут с клиент: {action_text}",
-            "created_by": st.session_state.username
-        }).execute()
-        st.rerun()
-
-    if new_client_action:
-        st.markdown('<div class="client-stream"><h4>Въвеждане на комуникация</h4>', unsafe_allow_html=True)
-        client_step = st.selectbox("Изберете етап", ["1. Изпратен мейл до О.К.", "2. Предложение към клиент (от О.К.)", "3. Удовлетвореност (Финал)"], key=f"cs_{ticket['id']}")
-        
-        c_details = ""
-        c_deadline = None
-        
-        if client_step == "1. Изпратен мейл до О.К.":
-            mail_date = st.date_input("Дата на мейла", key=f"md_{ticket['id']}")
-            c_details = f"Изпратен имейл на: {mail_date.strftime('%d.%m.%Y')}"
-        elif client_step == "2. Предложение към клиент (от О.К.)":
-            c_details = st.text_area("Въведете направеното предложение", key=f"pt_{ticket['id']}")
-            c_deadline = st.date_input("Очакван отговор до (Срок)", key=f"pd_{ticket['id']}")
-        elif client_step == "3. Удовлетвореност (Финал)":
-            is_satisfied = st.radio("Удовлетворен ли е клиентът?", ["Да", "Не"], horizontal=True, key=f"sat_{ticket['id']}")
-            follow_up = st.text_input("Коментар (ако НЕ е удовлетворен)", key=f"fc_{ticket['id']}")
-            c_details = f"Клиентът е удовлетворен: {is_satisfied}. Коментар: {follow_up}"
-
-        if st.button("💾 Запиши действие с клиент", key=f"btn_c_{ticket['id']}"):
-            history_payload = {
-                "complaint_id": ticket['id'], "action_type": f"Клиент: {client_step.split('. ')[1]}",
-                "action_details": c_details, "deadline_date": str(c_deadline) if c_deadline else None,
-                "created_by": st.session_state.username
-            }
-            supabase.table("complaint_history").insert(history_payload).execute()
-            st.success("Действието с клиента е записано в хронологията!")
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    st.subheader("⚙️ Продължаване на процеса (Вътрешен)")
-    st.write(f"Текущ мастър статус: **{current_status}**")
-    
-    if current_status == "Чака проверка":
-        st.warning("В момента се изисква проверка според последната стъпка.")
-        check_result = st.text_input("До какво доведе проверката? (до 100 символа)", max_chars=100, key=f"cr_{ticket['id']}")
-        if st.button("Приключи проверката", type="primary", key=f"btn_chk_{ticket['id']}"):
-            if not check_result:
-                st.error("Моля, въведете резултат от проверката.")
-            else:
-                supabase.table("complaint_history").insert({
-                    "complaint_id": ticket['id'], "action_type": "Резултат от проверка", 
-                    "action_details": check_result, "created_by": st.session_state.username
-                }).execute()
-                supabase.table("complaints").update({"current_status": "Чака заключение и препоръка", "current_deadline": None}).eq("id", ticket['id']).execute()
-                st.rerun()
     else:
-        new_conc = st.selectbox("Заключение контролинг", ["Избери..."] + CONCLUSIONS, key=f"nc_{ticket['id']}")
-        new_rec = st.selectbox("Препоръка контролинг", ["Избери..."] + RECOMMENDATIONS, key=f"nr_{ticket['id']}")
-        field_details = ""
-        if new_rec == "Проверка (поле)":
-            field_details = st.text_input("Какво точно ще се проверява?", max_chars=100, key=f"fd_{ticket['id']}")
-            
-        assignee = st.selectbox("Възложено на (Роля)", ["Избери..."] + ROLES_LIST, key=f"as_{ticket['id']}")
-        deadline = st.date_input("Ръчен срок (Край до)", value=None, key=f"dl_{ticket['id']}")
+        st.subheader("🤝 Комуникация с клиент (Външен процес)")
+        current_client_action = ticket.get('client_action_needed', False)
+        new_client_action = st.toggle("Извънреден диспут: Очаква се действие с клиента", value=current_client_action, key=f"tgl_{ticket['id']}")
         
-        col_btn1, col_btn2 = st.columns(2)
-        with col_btn1:
-            save_step = st.button("💾 Запази следваща стъпка", type="primary", key=f"btn_s_{ticket['id']}")
-        with col_btn2:
-            close_ticket = st.button("✅ ПРИКЛЮЧИ СИГНАЛА", key=f"btn_x_{ticket['id']}")
-
-        if save_step:
-            if new_conc == "Избери..." or new_rec == "Избери...": st.error("Моля, изберете Заключение и Препоръка!")
-            elif new_rec == "Проверка (поле)" and not field_details: st.error("Моля, опишете какво ще се проверява.")
-            elif new_rec != "Проверка (поле)" and assignee == "Избери...": st.error("Моля, изберете на кого възлагате изпълнението (Роля)!")
-            else:
-                next_status = "Чака проверка" if new_rec == "Проверка (поле)" else "Чака приключване"
-                action_text = f"Заключение: {new_conc} | Препоръка: {new_rec}"
-                full_details = f"{action_text}. Детайли: {field_details}" if field_details else action_text
-                supabase.table("complaint_history").insert({
-                    "complaint_id": ticket['id'], "action_type": "Назначена стъпка", "action_details": full_details,
-                    "assigned_to": assignee if assignee != "Избери..." else None, "deadline_date": str(deadline) if deadline else None,
-                    "created_by": st.session_state.username
-                }).execute()
-                supabase.table("complaints").update({"current_status": next_status, "current_deadline": str(deadline) if deadline else None}).eq("id", ticket['id']).execute()
-                st.rerun()
-                
-        if close_ticket:
-            supabase.table("complaints").update({"current_status": "Приключено", "current_deadline": None}).eq("id", ticket['id']).execute()
-            supabase.table("complaint_history").insert({"complaint_id": ticket['id'], "action_type": "Сигналът е приключен", "created_by": st.session_state.username}).execute()
+        if new_client_action != current_client_action:
+            supabase.table("complaints").update({"client_action_needed": new_client_action}).eq("id", ticket['id']).execute()
+            action_text = "Активиран" if new_client_action else "Дезактивиран"
+            supabase.table("complaint_history").insert({
+                "complaint_id": ticket['id'],
+                "action_type": f"Диспут с клиент: {action_text}",
+                "created_by": st.session_state.username
+            }).execute()
             st.rerun()
 
+        if new_client_action:
+            st.markdown('<div class="client-stream"><h4>Въвеждане на комуникация</h4>', unsafe_allow_html=True)
+            client_step = st.selectbox("Изберете етап", ["1. Изпратен мейл до О.К.", "2. Предложение към клиент (от О.К.)", "3. Удовлетвореност (Финал)"], key=f"cs_{ticket['id']}")
+            
+            c_details = ""
+            c_deadline = None
+            
+            if client_step == "1. Изпратен мейл до О.К.":
+                mail_date = st.date_input("Дата на мейла", key=f"md_{ticket['id']}")
+                c_details = f"Изпратен имейл на: {mail_date.strftime('%d.%m.%Y')}"
+            elif client_step == "2. Предложение към клиент (от О.К.)":
+                c_details = st.text_area("Въведете направеното предложение", key=f"pt_{ticket['id']}")
+                c_deadline = st.date_input("Очакван отговор до (Срок)", key=f"pd_{ticket['id']}")
+            elif client_step == "3. Удовлетвореност (Финал)":
+                is_satisfied = st.radio("Удовлетворен ли е клиентът?", ["Да", "Не"], horizontal=True, key=f"sat_{ticket['id']}")
+                follow_up = st.text_input("Коментар (ако НЕ е удовлетворен)", key=f"fc_{ticket['id']}")
+                c_details = f"Клиентът е удовлетворен: {is_satisfied}. Коментар: {follow_up}"
+
+            if st.button("💾 Запиши действие с клиент", key=f"btn_c_{ticket['id']}"):
+                history_payload = {
+                    "complaint_id": ticket['id'], "action_type": f"Клиент: {client_step.split('. ')[1]}",
+                    "action_details": c_details, "deadline_date": str(c_deadline) if c_deadline else None,
+                    "created_by": st.session_state.username
+                }
+                supabase.table("complaint_history").insert(history_payload).execute()
+                st.success("Действието с клиента е записано в хронологията!")
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        st.subheader("⚙️ Продължаване на процеса (Вътрешен)")
+        st.write(f"Текущ мастър статус: **{current_status}**")
+        
+        if current_status == "Чака проверка":
+            st.warning("В момента се изисква проверка според последната стъпка.")
+            check_result = st.text_input("До какво доведе проверката? (до 100 символа)", max_chars=100, key=f"cr_{ticket['id']}")
+            if st.button("Приключи проверката", type="primary", key=f"btn_chk_{ticket['id']}"):
+                if not check_result:
+                    st.error("Моля, въведете резултат от проверката.")
+                else:
+                    supabase.table("complaint_history").insert({
+                        "complaint_id": ticket['id'], "action_type": "Резултат от проверка", 
+                        "action_details": check_result, "created_by": st.session_state.username
+                    }).execute()
+                    supabase.table("complaints").update({"current_status": "Чака заключение и препоръка", "current_deadline": None}).eq("id", ticket['id']).execute()
+                    st.rerun()
+        else:
+            new_conc = st.selectbox("Заключение контролинг", ["Избери..."] + CONCLUSIONS, key=f"nc_{ticket['id']}")
+            new_rec = st.selectbox("Препоръка контролинг", ["Избери..."] + RECOMMENDATIONS, key=f"nr_{ticket['id']}")
+            field_details = ""
+            if new_rec == "Проверка (поле)":
+                field_details = st.text_input("Какво точно ще се проверява?", max_chars=100, key=f"fd_{ticket['id']}")
+                
+            assignee = st.selectbox("Възложено на (Роля)", ["Избери..."] + ROLES_LIST, key=f"as_{ticket['id']}")
+            deadline = st.date_input("Ръчен срок (Край до)", value=None, key=f"dl_{ticket['id']}")
+            
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                save_step = st.button("💾 Запази следваща стъпка", type="primary", key=f"btn_s_{ticket['id']}")
+            with col_btn2:
+                close_ticket = st.button("✅ ПРИКЛЮЧИ СИГНАЛА", key=f"btn_x_{ticket['id']}")
+
+            if save_step:
+                if new_conc == "Избери..." or new_rec == "Избери...": st.error("Моля, изберете Заключение и Препоръка!")
+                elif new_rec == "Проверка (поле)" and not field_details: st.error("Моля, опишете какво ще се проверява.")
+                elif new_rec != "Проверка (поле)" and assignee == "Избери...": st.error("Моля, изберете на кого възлагате изпълнението (Роля)!")
+                else:
+                    next_status = "Чака проверка" if new_rec == "Проверка (поле)" else "Чака приключване"
+                    action_text = f"Заключение: {new_conc} | Препоръка: {new_rec}"
+                    full_details = f"{action_text}. Детайли: {field_details}" if field_details else action_text
+                    supabase.table("complaint_history").insert({
+                        "complaint_id": ticket['id'], "action_type": "Назначена стъпка", "action_details": full_details,
+                        "assigned_to": assignee if assignee != "Избери..." else None, "deadline_date": str(deadline) if deadline else None,
+                        "created_by": st.session_state.username
+                    }).execute()
+                    supabase.table("complaints").update({"current_status": next_status, "current_deadline": str(deadline) if deadline else None}).eq("id", ticket['id']).execute()
+                    st.rerun()
+                    
+            if close_ticket:
+                supabase.table("complaints").update({"current_status": "Приключено", "current_deadline": None}).eq("id", ticket['id']).execute()
+                supabase.table("complaint_history").insert({"complaint_id": ticket['id'], "action_type": "Сигналът е приключен", "created_by": st.session_state.username}).execute()
+                st.rerun()
+
+    # --- НОВ МОДУЛ ЗА ИМЕЙЛ АВТОМАТИЗАЦИЯ ---
+    st.markdown("---")
+    st.subheader("📧 Подготовка на имейл (Споделяне на информация)")
+    with st.expander("Избор на информация за изпращане", expanded=False):
+        st.write("Изберете кои блокове с информация да бъдат включени в имейла. Всички са маркирани по подразбиране.")
+        
+        em_c1, em_c2 = st.columns(2)
+        with em_c1:
+            inc_basic = st.checkbox("Основни данни (Дата, Канал, Касае)", value=True, key=f"em_basic_{ticket['id']}")
+            inc_client = st.checkbox("Данни за клиента (Име, Контакти, Машини)", value=True, key=f"em_client_{ticket['id']}")
+        with em_c2:
+            inc_desc = st.checkbox("Описание на проблема", value=True, key=f"em_desc_{ticket['id']}")
+            inc_hist = st.checkbox("Хронология на действията", value=True, key=f"em_hist_{ticket['id']}")
+            
+        mail_parts = []
+        mail_parts.append(f"Здравейте,\n\nИзпращам информация относно регистриран сигнал в системата SequaK:\n")
+        
+        if inc_basic:
+            mail_parts.append(f"--- ОСНОВНИ ДАННИ ---\nКасае: {ticket.get('case_type', '-')}\nДата: {ticket.get('event_datetime', '')}\nКанал: {ticket.get('channel', '')}\n")
+        
+        if inc_client:
+            mail_parts.append(f"--- КЛИЕНТ ---\nИме/Наименование: {ticket.get('client_name', '-')}\nТелефон: {ticket.get('client_phone', '-')}\nИмейл: {ticket.get('client_email', '-')}\nЕИК: {ticket.get('client_eik', '-')}\nДоговор №: {ticket.get('contract_number', '-')}\nМашини: {ticket.get('machines', '-')}\n")
+            
+        if inc_desc:
+            mail_parts.append(f"--- ОПИСАНИЕ НА ПРОБЛЕМА ---\n{ticket.get('description', '')}\n")
+            
+        if inc_hist and history_data:
+            mail_parts.append("--- ХРОНОЛОГИЯ НА ДЕЙСТВИЯТА ---\n")
+            for rec in history_data:
+                dt_fmt = pd.to_datetime(rec['created_at']).strftime('%d.%m.%Y %H:%M')
+                mail_parts.append(f"- {dt_fmt} | {rec['action_type']} (от: {rec.get('created_by', '')})\n  Детайли: {rec.get('action_details', '')}")
+            mail_parts.append("\n")
+            
+        mail_parts.append(f"\nТекущ статус на сигнала: {current_status}\n\nПоздрави,\n{st.session_state.username}")
+        
+        final_mail_body = "\n".join(mail_parts)
+        
+        st.text_area("Преглед на съдържанието (Можете да копирате текста оттук):", value=final_mail_body, height=300, key=f"em_body_{ticket['id']}")
+        
+        # Подготовка на mailto линк
+        subject_text = f"Информация за сигнал от клиент: {ticket.get('client_name', 'Неизвестен')}"
+        subject_encoded = urllib.parse.quote(subject_text)
+        body_encoded = urllib.parse.quote(final_mail_body)
+        
+        mailto_link = f"mailto:?subject={subject_encoded}&body={body_encoded}"
+        
+        st.markdown(f"""
+        <a href="{mailto_link}" target="_blank">
+            <button style="background-color: #00aaff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%;">
+                📨 Създай писмо в Outlook
+            </button>
+        </a>
+        """, unsafe_allow_html=True)
+        st.caption("Ако бутонът не работи според очакванията на вашата машина, просто копирайте подготвения текст от полето по-горе и го поставете в нов имейл.")
+    
     st.markdown("---")
     with st.expander("🚫 Опции за анулиране (Сгрешен запис)"):
         st.warning("Внимание: Анулирането ще преустанови следенето на този сигнал.")
@@ -403,7 +458,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 5.1 (White text & Defaults)")
+st.sidebar.caption("Входът е защитен. Версия 5.2 (Mail-Builder)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
