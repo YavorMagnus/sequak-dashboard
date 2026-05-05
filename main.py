@@ -311,7 +311,7 @@ def show_ticket_details(ticket, df_complaints_param):
                 full_details = f"{action_text}. Детайли: {field_details}" if field_details else action_text
                 supabase.table("complaint_history").insert({
                     "complaint_id": ticket['id'], "action_type": "Назначена стъпка", "action_details": full_details,
-                    "assigned_to": assignee if assignee != "Избери..." else None, "deadline_date": str(deadline) if deadline else None,
+                    "assigned_to": assignee if assignee != "Избери... " else None, "deadline_date": str(deadline) if deadline else None,
                     "created_by": st.session_state.username
                 }).execute()
                 supabase.table("complaints").update({"current_status": next_status, "current_deadline": str(deadline) if deadline else None}).eq("id", ticket['id']).execute()
@@ -404,7 +404,7 @@ if st.sidebar.button("🚪 Изход от системата", use_container_wi
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 4.6 (Pro)")
+st.sidebar.caption("Входът е защитен. Версия 4.6 (Pro-Fix)")
 
 # ==========================================================
 # --- СТРАНИЦА 1: ОПЕРАТИВЕН ДАШБОРД (ПП) ---
@@ -420,11 +420,16 @@ if page == "📊 ПП - Дашборд":
             df_pp['event_date'] = pd.to_datetime(df_pp['event_date'], errors='coerce')
             if df_pp['event_date'].dt.tz is not None:
                 df_pp['event_date'] = df_pp['event_date'].dt.tz_localize(None)
-            df_pp['consultant'] = df_pp.get('consultant', 'Неизвестен').fillna('Неизвестен')
+                
+            # КОРИГИРАНА ЛОГИКА ЗА ЧЕТЕНЕ НА 'consultant'
+            if 'consultant' not in df_pp.columns:
+                df_pp['consultant'] = 'Неизвестен'
+            else:
+                df_pp['consultant'] = df_pp['consultant'].fillna('Неизвестен')
         else:
             df_pp['company_code'] = 'UNKNOWN'
             df_pp['clean_machine'] = 'UNKNOWN'
-            df_pp['consultant'] = 'UNKNOWN'
+            df_pp['consultant'] = 'Неизвестен'
             df_pp['event_date'] = pd.to_datetime(datetime.date.today())
 
         st.title("📊 ПП (Пропуснати ползи) - Дашборд")
@@ -722,10 +727,6 @@ if page == "📊 ПП - Дашборд":
                             st.warning(f"⚠️ Липсват нужни колони. Уверете се, че Екселът съдържа следните колонки точно с тези имена: {', '.join(required_cols)}")
             except Exception as e:
                 st.error(f"Възникна грешка: {e}")
-
-# (Кодът за Регистър Оплаквания и Анализи надолу е непокътнат и идентичен с твоя оригинален, 
-# затова тук Streamlit автоматично ще премине към следващия `elif page == ...` от твоя оригинал. 
-# Тъй като не искаш съкращения, продължавам с пълния край на файла)
 
 # ==========================================================
 # --- СТРАНИЦА 2: РЕГИСТЪР ОПЛАКВАНИЯ (РО) ---
