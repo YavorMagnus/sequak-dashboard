@@ -358,6 +358,22 @@ def show_ticket_details(ticket, df_complaints_param):
             </a>
             """, unsafe_allow_html=True)
 
+    # HARD DELETE ЗОНА (САМО ЗА СУПЕР-АДМИН)
+    if st.session_state.user_role == "Супер-админ":
+        st.markdown("---")
+        with st.expander("☢️ Опасна зона: Hard Delete на Сигнала"):
+            st.error("Внимание! Това действие е необратимо. Сигналът и цялата му хронология ще бъдат изтрити от базата данни завинаги.")
+            if st.button("❌ ИЗТРИЙ ТОЗИ СИГНАЛ НАПЪЛНО", key=f"hard_del_{ticket['id']}", type="primary"):
+                try:
+                    # Изтриваме първо хронологията (ако няма CASCADE)
+                    supabase.table("complaint_history").delete().eq("complaint_id", ticket['id']).execute()
+                    supabase.table("complaints").delete().eq("id", ticket['id']).execute()
+                    
+                    st.success("✅ Сигналът беше изтрит успешно!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Възникна грешка при изтриването: {e}")
+
 def show_company_tickets(company_code, df_complaints):
     col_title, col_btn = st.columns([4, 1])
     with col_title: st.subheader(f"📋 Всички сигнали за {company_code}")
