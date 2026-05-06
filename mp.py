@@ -5,7 +5,7 @@ import datetime
 import io
 import time
 import plotly.express as px
-from utils import supabase, COMPANY_MAP, standardize_company_code
+from utils import supabase, COMPANY_MAP, standardize_company_code, check_permission
 
 def render_mp_dashboard():
     try:
@@ -195,7 +195,7 @@ def render_mp_dashboard():
                 cons_stats = cons_stats.sort_values(by=['EUR откази'], ascending=[False])
                 
                 hide_date = datetime.date(2026, 6, 1)
-                is_reader = st.session_state.user_role != "Администратор"
+                is_reader = st.session_state.user_role not in ["Администратор", "Супер-админ"]
                 if is_reader and datetime.date.today() < hide_date:
                     cons_stats = cons_stats.drop(columns=['Проблемни', '% проблемни'])
 
@@ -211,22 +211,23 @@ def render_mp_dashboard():
             else:
                 st.info("В базата няма информация за Консултанти ('КА') за избрания срез.")
 
-            # Експорт
-            st.markdown("---")
-            with st.expander("📥 Изтегляне на филтрираните данни (Excel)"):
-                st.write(f"Готови за изтегляне: **{len(df_filtered)}** записа (отговарящи на избрания по-горе период).")
-                buffer_pp = io.BytesIO()
-                export_df_pp = df_filtered.copy()
-                if 'companies' in export_df_pp.columns: export_df_pp = export_df_pp.drop(columns=['companies'])
-                with pd.ExcelWriter(buffer_pp, engine='openpyxl') as writer:
-                    export_df_pp.to_excel(writer, index=False, sheet_name='Пропуснати_Ползи')
-                st.download_button(label="💾 Изтегли като .xlsx", data=buffer_pp.getvalue(), file_name=f"SequaK_PP_{start_date}_to_{end_date}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+            # Експорт - ЗАЩИТЕН
+            if check_permission("mp_dashboard", "export"):
+                st.markdown("---")
+                with st.expander("📥 Изтегляне на филтрираните данни (Excel)"):
+                    st.write(f"Готови за изтегляне: **{len(df_filtered)}** записа (отговарящи на избрания по-горе период).")
+                    buffer_pp = io.BytesIO()
+                    export_df_pp = df_filtered.copy()
+                    if 'companies' in export_df_pp.columns: export_df_pp = export_df_pp.drop(columns=['companies'])
+                    with pd.ExcelWriter(buffer_pp, engine='openpyxl') as writer:
+                        export_df_pp.to_excel(writer, index=False, sheet_name='Пропуснати_Ползи')
+                    st.download_button(label="💾 Изтегли като .xlsx", data=buffer_pp.getvalue(), file_name=f"SequaK_PP_{start_date}_to_{end_date}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
 
     except Exception as e:
         st.error(f"Възникна грешка при зареждане на таблото: {e}")
 
-    # Внос
-    if st.session_state.user_role == "Администратор":
+    # Внос - ЗАЩИТЕН
+    if check_permission("mp_dashboard", "upload_data"):
         st.markdown("---")
         st.header("📥 Внос на данни (Пропуснати ползи)")
         uploaded_file = st.file_uploader("Изберете Excel файл (.xlsx)", type=["xlsx", "xls"])
