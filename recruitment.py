@@ -50,7 +50,10 @@ def process_candidate_zip(zip_bytes, filename, position_id):
         return False, f"Грешка при четене на ZIP: {e}"
 
     if not cv_text_full.strip():
-        return False, "Не бе намерен четим текст (HTML/PDF) в архива."
+        return False, f"Не бе намерен четим текст (HTML/PDF) в архива на {candidate_name}."
+
+    # ЧИСТАЧ: Премахване на Null Bytes (\x00), които чупят PostgreSQL
+    cv_text_full = cv_text_full.replace('\x00', '').replace('\0', '')
 
     # Извличане на Имейл и Телефон чрез Regex
     email_match = re.search(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', cv_text_full)
@@ -59,36 +62,42 @@ def process_candidate_zip(zip_bytes, filename, position_id):
     email = email_match.group(0) if email_match else f"unknown_{datetime.datetime.now().timestamp()}@noemail.com"
     phone = phone_match.group(0).strip() if phone_match else "Не е намерен"
 
-    # ДЕДУБЛИКАЦИЯ: Проверка дали кандидатът съществува
-    cand_res = supabase.table("hr_candidates").select("id").eq("email", email).execute()
-    
-    if cand_res.data:
-        # Кандидатът съществува - Обновяваме му CV-то (за да е най-актуалното)
-        cand_id = cand_res.data[0]['id']
-        supabase.table("hr_candidates").update({"cv_text": cv_text_full, "phone": phone}).eq("id", cand_id).execute()
-    else:
-        # Нов кандидат - Създаваме го
-        new_cand = supabase.table("hr_candidates").insert({
-            "full_name": candidate_name,
-            "email": email,
-            "phone": phone,
-            "cv_text": cv_text_full
+    # ЗАЩИТЕН БЛОК ЗА БАЗАТА ДАННИ
+    try:
+        # ДЕДУБЛИКАЦИЯ: Проверка дали кандидатът съществува
+        cand_res = supabase.table("hr_candidates").select("id").eq("email", email).execute()
+        
+        if cand_res.data:
+            # Кандидатът съществува - Обновяваме му CV-то (за да е най-актуалното)
+            cand_id = cand_res.data[0]['id']
+            supabase.table("hr_candidates").update({"cv_text": cv_text_full, "phone": phone}).eq("id", cand_id).execute()
+        else:
+            # Нов кандидат - Създаваме го
+            new_cand = supabase.table("hr_candidates").insert({
+                "full_name": candidate_name,
+                "email": email,
+                "phone": phone,
+                "cv_text": cv_text_full
+            }).execute()
+            cand_id = new_cand.data[0]['id']
+
+        # Проверка дали вече е кандидатствал за ТАЗИ позиция
+        app_res = supabase.table("hr_applications").select("id").eq("candidate_id", cand_id).eq("position_id", position_id).execute()
+        if app_res.data:
+            return False, f"{candidate_name} вече е кандидатствал за тази позиция."
+
+        # Създаваме "Лепилото" - Кандидатурата
+        supabase.table("hr_applications").insert({
+            "candidate_id": cand_id,
+            "position_id": position_id,
+            "kanban_status": "Ново CV"
         }).execute()
-        cand_id = new_cand.data[0]['id']
 
-    # Проверка дали вече е кандидатствал за ТАЗИ позиция
-    app_res = supabase.table("hr_applications").select("id").eq("candidate_id", cand_id).eq("position_id", position_id).execute()
-    if app_res.data:
-        return False, f"{candidate_name} вече е кандидатствал за тази позиция."
-
-    # Създаваме "Лепилото" - Кандидатурата
-    supabase.table("hr_applications").insert({
-        "candidate_id": cand_id,
-        "position_id": position_id,
-        "kanban_status": "Ново CV"
-    }).execute()
-
-    return True, f"Успешно добавен: {candidate_name} ({email})"
+        return True, f"Успешно добавен: {candidate_name} ({email})"
+    
+    except Exception as e:
+        # Ако базата гръмне, хващаме грешката и връщаме False, за да не спрем целия цикъл
+        return False, f"Базата данни отхвърли записа за {candidate_name}. Детайл: {e}"
 
 def render_recruitment_module():
     st.title("🎯 Рекрутмънт и Подбор")
