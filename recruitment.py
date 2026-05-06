@@ -4,6 +4,7 @@ import zipfile
 import io
 import re
 import datetime
+import time
 from utils import supabase, COMPANY_MAP, COMPANY_LIST, check_permission
 
 # Опит за импорт на PyPDF2 за четене на PDF-и (ако е инсталиран)
@@ -12,6 +13,11 @@ try:
     HAS_PYPDF = True
 except ImportError:
     HAS_PYPDF = False
+
+def sanitize_text(text):
+    """Премахва абсолютно всякакви невидими системни символи, които чупят базата данни"""
+    if not text: return ""
+    return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', str(text))
 
 def extract_text_from_html(html_content):
     """Изчиства HTML тагове и оставя само чистия текст"""
@@ -27,15 +33,17 @@ def extract_text_from_pdf(pdf_bytes):
         reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
         text = ""
         for page in reader.pages:
-            text += page.extract_text() + "\n"
+            extracted = page.extract_text()
+            if extracted:
+                text += extracted + "\n"
         return ' '.join(text.split())
     except Exception:
         return "Грешка при четене на PDF."
 
-def process_candidate_zip(zip_bytes, filename, position_id):
-    """Разопакова ZIP, извлича CV текста и създава записите в базите"""
+def parse_candidate_zip(zip_bytes, filename):
+    """САМО РАЗОПАКОВА И ЧЕТЕ ТЕКСТА - БЕЗ ДА ПИПА БАЗАТА ДАННИ"""
     cv_text_full = ""
-    candidate_name = filename.replace('.zip', '').replace('_', ' ').split(' 0')[0].title() # Грубо извличане на име от файла
+    candidate_name = filename.replace('.zip', '').replace('_', ' ').split(' 0')[0].title()
     
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
@@ -47,13 +55,13 @@ def process_candidate_zip(zip_bytes, filename, position_id):
                     pdf_bytes = z.read(file_info.filename)
                     cv_text_full += extract_text_from_pdf(pdf_bytes) + "\n\n"
     except Exception as e:
-        return False, f"Грешка при четене на ZIP: {e}"
+        return None, f"Грешка при четене на ZIP архива на {candidate_name}: {e}"
 
     if not cv_text_full.strip():
-        return False, f"Не бе намерен четим текст (HTML/PDF) в архива на {candidate_name}."
+        return None, f"Не бе намерен четим текст (HTML/PDF) в архива на {candidate_name}."
 
-    # ЧИСТАЧ: Премахване на Null Bytes (\x00), които чупят PostgreSQL
-    cv_text_full = cv_text_full.replace('\x00', '').replace('\0', '')
+    # БРУТАЛНО ИЗЧИСТВАНЕ НА ТЕКСТА (Sanitization)
+    cv_text_full = sanitize_text(cv_text_full)
 
     # Извличане на Имейл и Телефон чрез Regex
     email_match = re.search(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', cv_text_full)
@@ -62,42 +70,12 @@ def process_candidate_zip(zip_bytes, filename, position_id):
     email = email_match.group(0) if email_match else f"unknown_{datetime.datetime.now().timestamp()}@noemail.com"
     phone = phone_match.group(0).strip() if phone_match else "Не е намерен"
 
-    # ЗАЩИТЕН БЛОК ЗА БАЗАТА ДАННИ
-    try:
-        # ДЕДУБЛИКАЦИЯ: Проверка дали кандидатът съществува
-        cand_res = supabase.table("hr_candidates").select("id").eq("email", email).execute()
-        
-        if cand_res.data:
-            # Кандидатът съществува - Обновяваме му CV-то (за да е най-актуалното)
-            cand_id = cand_res.data[0]['id']
-            supabase.table("hr_candidates").update({"cv_text": cv_text_full, "phone": phone}).eq("id", cand_id).execute()
-        else:
-            # Нов кандидат - Създаваме го
-            new_cand = supabase.table("hr_candidates").insert({
-                "full_name": candidate_name,
-                "email": email,
-                "phone": phone,
-                "cv_text": cv_text_full
-            }).execute()
-            cand_id = new_cand.data[0]['id']
-
-        # Проверка дали вече е кандидатствал за ТАЗИ позиция
-        app_res = supabase.table("hr_applications").select("id").eq("candidate_id", cand_id).eq("position_id", position_id).execute()
-        if app_res.data:
-            return False, f"{candidate_name} вече е кандидатствал за тази позиция."
-
-        # Създаваме "Лепилото" - Кандидатурата
-        supabase.table("hr_applications").insert({
-            "candidate_id": cand_id,
-            "position_id": position_id,
-            "kanban_status": "Ново CV"
-        }).execute()
-
-        return True, f"Успешно добавен: {candidate_name} ({email})"
-    
-    except Exception as e:
-        # Ако базата гръмне, хващаме грешката и връщаме False, за да не спрем целия цикъл
-        return False, f"Базата данни отхвърли записа за {candidate_name}. Детайл: {e}"
+    return {
+        "full_name": candidate_name,
+        "email": email,
+        "phone": phone,
+        "cv_text": cv_text_full
+    }, "ОК"
 
 def render_recruitment_module():
     st.title("🎯 Рекрутмънт и Подбор")
@@ -147,12 +125,10 @@ def render_recruitment_module():
         else:
             st.subheader("Активни позиции (Канбан)")
             
-            # Избор на позиция за разглеждане
             pos_dict = {f"[{r['company_code']}] {r['title']} ({r['priority']})": r['id'] for _, r in df_positions.iterrows()}
             selected_pos_name = st.selectbox("Изберете позиция за разглеждане:", list(pos_dict.keys()))
             selected_pos_id = pos_dict[selected_pos_name]
 
-            # Изтегляне на кандидатурите за избраната позиция
             app_res = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("position_id", selected_pos_id).execute()
             df_apps = pd.DataFrame(app_res.data)
 
@@ -180,7 +156,6 @@ def render_recruitment_module():
                             st.session_state.active_candidate_app = app
                             st.rerun()
 
-                # Разпределение по колони
                 apps_new = df_apps[df_apps['kanban_status'] == 'Ново CV']
                 apps_ai = df_apps[df_apps['kanban_status'] == 'Одобрен']
                 apps_int = df_apps[df_apps['kanban_status'] == 'Интервю']
@@ -273,7 +248,7 @@ def render_recruitment_module():
 
         show_candidate_dialog()
 
-    # --- ТАБ 2: ВНОС НА КАНДИДАТИ ---
+    # --- ТАБ 2: ВНОС НА КАНДИДАТИ (РЕД ПО РЕД ЗАЩИТА) ---
     with tab_import:
         if check_permission("recruitment", "upload_candidates"):
             st.subheader("📥 Внос на кандидати от jobs.bg")
@@ -288,16 +263,66 @@ def render_recruitment_module():
                 
                 if uploaded_files:
                     if st.button("🚀 Обработи и Качи в Базата", type="primary"):
-                        successes = 0
-                        progress_bar = st.progress(0)
                         
+                        status_text = st.empty()
+                        progress_bar = st.progress(0, text="Стъпка 1: Разопаковане и четене на ZIP файловете...")
+                        
+                        # --- СТЪПКА 1: ПАРСВАНЕ (БЕЗ ДА ПИПАМЕ БАЗАТА) ---
+                        parsed_candidates = []
                         for i, file in enumerate(uploaded_files):
-                            success, msg = process_candidate_zip(file.getvalue(), file.name, target_pos_id)
-                            if success: successes += 1
-                            else: st.error(msg)
-                            progress_bar.progress((i + 1) / len(uploaded_files))
+                            cand_dict, msg = parse_candidate_zip(file.getvalue(), file.name)
+                            if cand_dict:
+                                parsed_candidates.append(cand_dict)
+                            else:
+                                st.warning(msg)
+                            progress_bar.progress((i + 1) / len(uploaded_files), text=f"Четене: {i+1} от {len(uploaded_files)}...")
+
+                        # --- СТЪПКА 2: КАЧВАНЕ В БАЗАТА (РЕД ПО РЕД СЪС ЗАЩИТА) ---
+                        if parsed_candidates:
+                            status_text.info(f"Приключено четенето. Започва проверка и качване на {len(parsed_candidates)} записа...")
+                            time.sleep(1)
                             
-                        st.success(f"✅ Готово! Успешно качени {successes} от {len(uploaded_files)} кандидати.")
+                            success_count = 0
+                            skip_count = 0
+                            error_count = 0
+                            
+                            for i, cand in enumerate(parsed_candidates):
+                                progress_bar.progress((i + 1) / len(parsed_candidates), text=f"Запис в базата: {i+1} от {len(parsed_candidates)} ({cand['full_name']})")
+                                
+                                try:
+                                    # Проверка дали съществува
+                                    cand_res = supabase.table("hr_candidates").select("id").eq("email", cand['email']).execute()
+                                    
+                                    if cand_res.data:
+                                        cand_id = cand_res.data[0]['id']
+                                        supabase.table("hr_candidates").update({"cv_text": cand['cv_text'], "phone": cand['phone']}).eq("id", cand_id).execute()
+                                    else:
+                                        new_cand = supabase.table("hr_candidates").insert({
+                                            "full_name": cand['full_name'], "email": cand['email'],
+                                            "phone": cand['phone'], "cv_text": cand['cv_text']
+                                        }).execute()
+                                        cand_id = new_cand.data[0]['id']
+
+                                    # Проверка за дублирана кандидатура за позицията
+                                    app_res = supabase.table("hr_applications").select("id").eq("candidate_id", cand_id).eq("position_id", target_pos_id).execute()
+                                    
+                                    if app_res.data:
+                                        skip_count += 1
+                                        st.info(f"ℹ️ {cand['full_name']} вече е кандидатствал за тази позиция (Пропуснат).")
+                                    else:
+                                        supabase.table("hr_applications").insert({
+                                            "candidate_id": cand_id, "position_id": target_pos_id, "kanban_status": "Ново CV"
+                                        }).execute()
+                                        success_count += 1
+                                        
+                                except Exception as e:
+                                    error_count += 1
+                                    st.error(f"❌ Грешка при запис на {cand['full_name']}. Детайл: {e}")
+                                    
+                            progress_bar.empty()
+                            status_text.success(f"✅ Процесът приключи! Успешно добавени: {success_count} | Обновени дубликати: {skip_count} | Грешки: {error_count}")
+                            time.sleep(3)
+                            st.rerun()
         else:
             st.info("Нямате права за внос на кандидати.")
 
@@ -307,7 +332,6 @@ def render_recruitment_module():
         search_q = st.text_input("Търсене по ключова дума в CV-тата (напр. 'строителна техника', 'Английски', 'Перник')")
         
         if search_q:
-            # Търсене в текста на CV-то
             try:
                 res_search = supabase.table("hr_candidates").select("*").ilike("cv_text", f"%{search_q}%").execute()
                 df_search = pd.DataFrame(res_search.data)
