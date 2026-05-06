@@ -186,6 +186,19 @@ def render_recruitment_module():
                     st.markdown(f"<h4 style='text-align:center;'>За Интервю ({len(apps_int)})</h4>", unsafe_allow_html=True)
                     for _, row in apps_int.iterrows(): render_candidate_card(row.to_dict(), col_interview)
 
+            # HARD DELETE ЗОНА ЗА ПОЗИЦИЯТА (САМО ЗА СУПЕР-АДМИН)
+            if st.session_state.user_role == "Супер-админ":
+                st.markdown("<br><br>", unsafe_allow_html=True)
+                with st.expander("☢️ Опасна зона: Hard Delete на Позицията"):
+                    st.error("Внимание! Изтриването на позицията ще изтрие и всички нейни Канбан-картончета (кандидатури). Самите хора ще останат в базата (Архив).")
+                    if st.button("❌ ИЗТРИЙ ТАЗИ ПОЗИЦИЯ НАПЪЛНО", key=f"del_pos_{selected_pos_id}", type="primary"):
+                        try:
+                            supabase.table("hr_positions").delete().eq("id", selected_pos_id).execute()
+                            st.success("✅ Позицията беше изтрита успешно!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Грешка при изтриване: {e}")
+
     # --- КАРТОН НА КАНДИДАТА (ДИАЛОГ) ---
     if 'active_candidate_app' in st.session_state:
         @st.dialog("Картон на Кандидата", width="large")
@@ -235,6 +248,20 @@ def render_recruitment_module():
                 del st.session_state.active_candidate_app
                 st.rerun()
                 
+            # HARD DELETE ЗОНА ЗА КАНДИДАТА (САМО ЗА СУПЕР-АДМИН)
+            if st.session_state.user_role == "Супер-админ":
+                st.markdown("---")
+                with st.expander("☢️ Опасна зона: Hard Delete на Кандидата"):
+                    st.error("Внимание! Това ще изтрие този човек от ЦЯЛАТА система завинаги, включително историята му от други позиции.")
+                    if st.button("❌ ИЗТРИЙ ТОЗИ КАНДИДАТ НАПЪЛНО", key=f"del_cand_{cand['id']}", type="primary"):
+                        try:
+                            supabase.table("hr_candidates").delete().eq("id", cand['id']).execute()
+                            del st.session_state.active_candidate_app
+                            st.success("✅ Кандидатът беше изтрит успешно!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Грешка при изтриване: {e}")
+
         show_candidate_dialog()
 
     # --- ТАБ 2: ВНОС НА КАНДИДАТИ ---
