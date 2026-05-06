@@ -8,6 +8,7 @@ from utils import supabase, check_permission
 from mp import render_mp_dashboard
 from ro import check_and_show_alerts, render_ro_registry, render_ro_analytics
 from admin_panel import render_admin_panel
+from recruitment import render_recruitment_module
 
 st.markdown("""
     <style>
@@ -110,6 +111,9 @@ if check_permission("mp_dashboard", "read"):
 if check_permission("ro_registry", "read"):
     available_pages.append("📝 Сигнали и оплаквания")
     available_pages.append("📈 Анализи и Справки (РО)")
+    
+if check_permission("recruitment", "read"):
+    available_pages.append("🎯 Рекрутмънт и Подбор")
 
 if st.session_state.user_role == "Супер-админ":
     available_pages.append("⚙️ Управление на достъпи")
@@ -142,6 +146,9 @@ elif page == "📝 Сигнали и оплаквания":
 
 elif page == "📈 Анализи и Справки (РО)":
     render_ro_analytics()
+    
+elif page == "🎯 Рекрутмънт и Подбор":
+    render_recruitment_module()
 
 elif page == "⚙️ Управление на достъпи":
     render_admin_panel()
