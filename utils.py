@@ -54,6 +54,15 @@ AVAILABLE_PERMISSIONS = {
             "cancel_ticket": "Анулиране на сигнал (Сгрешен запис)",
             "export": "Експорт на данни (Excel)"
         }
+    },
+    "recruitment": {
+        "name": "Модул: Рекрутмънт",
+        "actions": {
+            "read": "Визуализация на позиции (Четене)",
+            "manage_positions": "Създаване и управление на позиции",
+            "upload_candidates": "Зареждане на CV-та и ZIP файлове",
+            "evaluate": "AI Оценка и местене по Канбан"
+        }
     }
 }
 
