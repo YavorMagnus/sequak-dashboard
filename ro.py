@@ -20,6 +20,12 @@ def show_ticket_details(ticket, df_complaints_param):
     history_data = history_res.data
     current_status = ticket.get('current_status', 'Чака заключение и препоръка')
     
+    # Сигурно извличане на името на фирмата (оправя бъг 1)
+    company_name = ticket.get('Фирма')
+    if not company_name or company_name == '-':
+        c_id = ticket.get('company_id')
+        company_name = next((code for code, i in COMPANY_MAP.items() if i == c_id), '-')
+    
     with tab_main:
         related_df = get_related_signals(ticket, df_complaints_param)
         
@@ -28,13 +34,21 @@ def show_ticket_details(ticket, df_complaints_param):
             for _, dup_row in related_df.iterrows():
                 dup_date = pd.to_datetime(dup_row.get('event_datetime')).strftime('%d.%m.%Y')
                 dup_status = dup_row.get('current_status', 'Неопределен')
-                with st.expander(f"Свързан сигнал от {dup_date} ({dup_row.get('Фирма', '')}) - Статус: {dup_status}"):
+                # Сигурно извличане на фирмата и за свързания сигнал
+                dup_comp = dup_row.get('Фирма')
+                if not dup_comp or dup_comp == '-':
+                    dup_c_id = dup_row.get('company_id')
+                    dup_comp = next((code for code, i in COMPANY_MAP.items() if i == dup_c_id), '-')
+                
+                with st.expander(f"Свързан сигнал от {dup_date} ({dup_comp}) - Статус: {dup_status}"):
                     st.markdown(f"**Канал:** {dup_row.get('channel', '-')} | **Касае:** {dup_row.get('case_type', '-')}")
                     st.markdown(f"**Описание:** {dup_row.get('description', '-')}")
                     st.info("💡 *Бележка: За да редактирате този свързан сигнал, използвайте Търсачката.*")
             st.markdown("---")
 
-        st.markdown(f"### Сигнал от: **{ticket.get('client_name', 'Неизвестен')}**")
+        # Оправяне на бъг 2: Използване на чист HTML за заглавието
+        client_name_safe = str(ticket.get('client_name', 'Неизвестен')).strip()
+        st.markdown(f"<h3 style='color: #FFD700; margin-bottom: 0px;'>Сигнал от: {client_name_safe}</h3>", unsafe_allow_html=True)
         st.caption(f"Дата: {ticket.get('event_datetime', '')} | Канал: {ticket.get('channel', '')} | Касае: {ticket.get('case_type', '')}")
         
         col1, col2 = st.columns(2)
@@ -43,7 +57,7 @@ def show_ticket_details(ticket, df_complaints_param):
             st.write(f"**Имейл:** {ticket.get('client_email', '-')}")
             st.write(f"**ЕИК:** {ticket.get('client_eik', '-')}")
         with col2:
-            st.write(f"**Фирма:** {ticket.get('Фирма', '-')}")
+            st.write(f"**Фирма:** {company_name}")
             st.write(f"**Договор №:** {ticket.get('contract_number', '-')}")
             st.write(f"**Машина/и:** {ticket.get('machines', '-')}")
             st.write(f"**Аудио запис (номер):** {ticket.get('call_number', '-')}")
@@ -214,13 +228,14 @@ def show_ticket_details(ticket, df_complaints_param):
         
         col_data_1, col_chk_1 = st.columns([11, 1])
         with col_data_1:
-            st.markdown(f"**Сигнал от: {ticket.get('client_name', 'Неизвестен')}**")
+            # Оправяне на бъг 2 и тук
+            st.markdown(f"<strong style='font-size:1.1em;'>Сигнал от: {client_name_safe}</strong>", unsafe_allow_html=True)
             st.caption(f"Дата: {ticket.get('event_datetime', '')} | Канал: {ticket.get('channel', '')} | Касае: {ticket.get('case_type', '')}")
             sc1, sc2 = st.columns(2)
             sc1.write(f"Телефон: {ticket.get('client_phone', '-')}")
             sc1.write(f"Имейл: {ticket.get('client_email', '-')}")
             sc1.write(f"ЕИК: {ticket.get('client_eik', '-')}")
-            sc2.write(f"Фирма: {ticket.get('Фирма', '-')}")
+            sc2.write(f"Фирма: {company_name}")
             sc2.write(f"Договор №: {ticket.get('contract_number', '-')}")
             sc2.write(f"Машина/и: {ticket.get('machines', '-')}")
             sc2.write(f"Аудио запис: {ticket.get('call_number', '-')}")
@@ -270,11 +285,11 @@ def show_ticket_details(ticket, df_complaints_param):
         """
         if inc_main_info:
             html_content += f"""
-            <h4 style="color: #111111; border-bottom: 2px solid #FFD700; padding-bottom: 5px; margin-top: 20px;">Сигнал от: {ticket.get('client_name', 'Неизвестен')}</h4>
+            <h4 style="color: #111111; border-bottom: 2px solid #FFD700; padding-bottom: 5px; margin-top: 20px;">Сигнал от: {client_name_safe}</h4>
             <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px;">
             <tr style="background-color: #f9f9f9;">
             <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Дата:</b> {ticket.get('event_datetime', '')}</td>
-            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Фирма:</b> {ticket.get('Фирма', '-')}</td>
+            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Фирма:</b> {company_name}</td>
             </tr>
             <tr>
             <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Канал:</b> {ticket.get('channel', '')}</td>
@@ -321,10 +336,10 @@ def show_ticket_details(ticket, df_complaints_param):
         st.markdown("<br>", unsafe_allow_html=True)
         
         with st.expander("🔗 Резервен вариант (Ако искате мейл само с прост текст)"):
-            plain_text = f"Здравейте,\n\nСигнал от: {ticket.get('client_name', 'Неизвестен')}\nФирма: {ticket.get('Фирма', '-')}\nТекущ статус: {current_status}\n\n"
+            plain_text = f"Здравейте,\n\nСигнал от: {client_name_safe}\nФирма: {company_name}\nТекущ статус: {current_status}\n\n"
             if inc_description: plain_text += f"Описание:\n{ticket.get('description', '')}\n\n"
             plain_text += f"Поздрави,\n{st.session_state.username}"
-            subject_encoded = urllib.parse.quote(f"Информация за сигнал от клиент: {ticket.get('client_name', 'Неизвестен')}")
+            subject_encoded = urllib.parse.quote(f"Информация за сигнал от клиент: {client_name_safe}")
             body_encoded = urllib.parse.quote(plain_text)
             mailto_link = f"mailto:?subject={subject_encoded}&body={body_encoded}"
             st.markdown(f"""
@@ -576,10 +591,9 @@ def render_ro_registry():
     with tab_kanban:
         st.markdown("### Оперативно управление на сигналите")
         
-        # Задаване на стриктния ред на фирмите
         desired_order = ['REN', 'MAS', 'CIM', 'CMX', 'AST', 'BAU', 'RSX']
         ordered_companies = [c for c in desired_order if c in COMPANY_LIST]
-        ordered_companies += [c for c in COMPANY_LIST if c not in desired_order] # Добавяме останалите, ако има нови
+        ordered_companies += [c for c in COMPANY_LIST if c not in desired_order]
 
         kb_comp_filter = st.radio("Покажи сигнали за фирма:", ["Всички"] + ordered_companies, horizontal=True, key="kb_filter")
         
@@ -588,12 +602,24 @@ def render_ro_registry():
             total_active = len(df_kb_all)
             comp_counts = df_kb_all['Фирма'].value_counts().to_dict()
             
-            # Елегантен брояч под радио бутоните
-            stats_str = f"**Неприключени сигнали:** Всички ({total_active})"
+            # Оправяне на бъг 3: Модерен "секси" брояч с HTML/CSS баджове
+            badges_html = f"""
+            <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: -5px; margin-bottom: 20px;">
+                <div style="background-color: #2a2a2a; border-left: 3px solid #FFD700; padding: 5px 12px; border-radius: 4px; font-size: 0.9em; color: #eee;">
+                    <strong>Всички:</strong> <span style="color: #FFD700; font-weight: bold;">{total_active}</span>
+                </div>
+            """
             for c in ordered_companies:
-                stats_str += f" | {c} ({comp_counts.get(c, 0)})"
-                
-            st.markdown(f"<div style='font-size: 0.9em; color: #aaaaaa; margin-top: -10px; margin-bottom: 20px;'>{stats_str}</div>", unsafe_allow_html=True)
+                cnt = comp_counts.get(c, 0)
+                color = "#00aaff" if cnt > 0 else "#666666"
+                badges_html += f"""
+                <div style="background-color: #1e1e1e; border: 1px solid #444; padding: 5px 10px; border-radius: 4px; font-size: 0.85em; color: #ccc;">
+                    {c}: <span style="color: {color}; font-weight: bold;">{cnt}</span>
+                </div>
+                """
+            badges_html += "</div>"
+            
+            st.markdown(badges_html, unsafe_allow_html=True)
             st.markdown("---")
             
             df_kb = df_kb_all.copy()
