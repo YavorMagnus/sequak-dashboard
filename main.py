@@ -4,9 +4,10 @@ import streamlit as st
 st.set_page_config(page_title="SequaK Workspace", page_icon="🏗️", layout="wide")
 
 # ИМПОРТИРАНЕ ОТ НОВИТЕ МОДУЛИ
-from utils import supabase
+from utils import supabase, check_permission
 from mp import render_mp_dashboard
 from ro import check_and_show_alerts, render_ro_registry, render_ro_analytics
+from admin_panel import render_admin_panel
 
 st.markdown("""
     <style>
@@ -54,12 +55,13 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ==========================================================
-# --- СИГУРНОСТ И ЛОГИН (RBAC) ---
+# --- СИГУРНОСТ И ЛОГИН (RBAC + ПРАВА) ---
 # ==========================================================
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_role = None
     st.session_state.username = None
+    st.session_state.user_permissions = {}
     st.session_state.alerts_dismissed = False
 
 if not st.session_state.logged_in:
@@ -80,8 +82,10 @@ if not st.session_state.logged_in:
                     if res.data:
                         user_data = res.data[0]
                         st.session_state.logged_in = True
-                        st.session_state.user_role = user_data['role']
+                        st.session_state.user_role = user_data.get('role', 'Четец')
                         st.session_state.username = user_data['username']
+                        # Извличаме детайлния JSON с права
+                        st.session_state.user_permissions = user_data.get('permissions') or {}
                         st.session_state.alerts_dismissed = False
                         st.rerun()
                     else:
@@ -89,26 +93,43 @@ if not st.session_state.logged_in:
     st.stop() 
 
 # Извикване на алармите ПРЕДИ страничното меню!
-check_and_show_alerts()
+if check_permission("ro_registry", "read"):
+    check_and_show_alerts()
 
 # ==========================================================
 # --- СТРАНИЧНО МЕНЮ (SIDEBAR) ---
 # ==========================================================
 st.sidebar.title("🏗️ SequaK Меню")
 
-available_pages = ["📊 ПП - Дашборд", "📝 Сигнали и оплаквания", "📈 Анализи и Справки (РО)"]
-page = st.sidebar.radio("Изберете модул:", available_pages)
+# ДИНАМИЧНО МЕНЮ НА БАЗА ПРАВА
+available_pages = []
+
+if check_permission("mp_dashboard", "read"):
+    available_pages.append("📊 ПП - Дашборд")
+
+if check_permission("ro_registry", "read"):
+    available_pages.append("📝 Сигнали и оплаквания")
+    available_pages.append("📈 Анализи и Справки (РО)")
+
+if st.session_state.user_role == "Супер-админ":
+    available_pages.append("⚙️ Управление на достъпи")
+
+if not available_pages:
+    st.sidebar.warning("Нямате права за достъп до нито един модул.")
+    page = None
+else:
+    page = st.sidebar.radio("Изберете модул:", available_pages)
 
 st.sidebar.markdown("---")
 st.sidebar.write(f"👤 **Профил:** {st.session_state.username}")
-st.sidebar.write(f"🛡️ **Достъп:** {st.session_state.user_role}")
+st.sidebar.write(f"🛡️ **Роля:** {st.session_state.user_role}")
 
 if st.sidebar.button("🚪 Изход от системата", use_container_width=True):
     st.session_state.clear()
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Входът е защитен. Версия 7.0 (Модулна Архитектура)")
+st.sidebar.caption("Входът е защитен. Версия 8.0 (Хибридни права)")
 
 # ==========================================================
 # --- РУТИРАНЕ (ROUTING) ---
@@ -121,3 +142,6 @@ elif page == "📝 Сигнали и оплаквания":
 
 elif page == "📈 Анализи и Справки (РО)":
     render_ro_analytics()
+
+elif page == "⚙️ Управление на достъпи":
+    render_admin_panel()
