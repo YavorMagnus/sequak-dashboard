@@ -14,7 +14,7 @@ from utils import (supabase, COMPANY_MAP, COMPANY_LIST, parse_smart_time,
 
 @st.dialog("Картон на сигнала", width="large")
 def show_ticket_details(ticket, df_complaints_param):
-    tab_main, tab_email = st.tabs(["📑 Данни и Действия", "📧 Композиране на мейл (Секси Режим)"])
+    tab_main, tab_email = st.tabs(["📑 Данни и Действия", "📧 Композиране на мейл - шарено"])
     
     history_res = supabase.table("complaint_history").select("*").eq("complaint_id", ticket['id']).order("created_at", desc=False).execute()
     history_data = history_res.data
@@ -43,6 +43,7 @@ def show_ticket_details(ticket, df_complaints_param):
             st.write(f"**Имейл:** {ticket.get('client_email', '-')}")
             st.write(f"**ЕИК:** {ticket.get('client_eik', '-')}")
         with col2:
+            st.write(f"**Фирма:** {ticket.get('Фирма', '-')}")
             st.write(f"**Договор №:** {ticket.get('contract_number', '-')}")
             st.write(f"**Машина/и:** {ticket.get('machines', '-')}")
             st.write(f"**Аудио запис (номер):** {ticket.get('call_number', '-')}")
@@ -219,6 +220,7 @@ def show_ticket_details(ticket, df_complaints_param):
             sc1.write(f"Телефон: {ticket.get('client_phone', '-')}")
             sc1.write(f"Имейл: {ticket.get('client_email', '-')}")
             sc1.write(f"ЕИК: {ticket.get('client_eik', '-')}")
+            sc2.write(f"Фирма: {ticket.get('Фирма', '-')}")
             sc2.write(f"Договор №: {ticket.get('contract_number', '-')}")
             sc2.write(f"Машина/и: {ticket.get('machines', '-')}")
             sc2.write(f"Аудио запис: {ticket.get('call_number', '-')}")
@@ -272,17 +274,21 @@ def show_ticket_details(ticket, df_complaints_param):
             <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px;">
             <tr style="background-color: #f9f9f9;">
             <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Дата:</b> {ticket.get('event_datetime', '')}</td>
-            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Договор №:</b> {ticket.get('contract_number', '-')}</td>
+            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Фирма:</b> {ticket.get('Фирма', '-')}</td>
             </tr>
             <tr>
             <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Канал:</b> {ticket.get('channel', '')}</td>
-            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Машина/и:</b> {ticket.get('machines', '-')}</td>
+            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Договор №:</b> {ticket.get('contract_number', '-')}</td>
             </tr>
             <tr style="background-color: #f9f9f9;">
             <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Телефон:</b> {ticket.get('client_phone', '-')}</td>
-            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Имейл:</b> {ticket.get('client_email', '-')}</td>
+            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Машина/и:</b> {ticket.get('machines', '-')}</td>
             </tr>
             <tr>
+            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Имейл:</b> {ticket.get('client_email', '-')}</td>
+            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Аудио запис:</b> {ticket.get('call_number', '-')}</td>
+            </tr>
+            <tr style="background-color: #f9f9f9;">
             <td style="padding: 8px; border: 1px solid #eeeeee;"><b>ЕИК:</b> {ticket.get('client_eik', '-')}</td>
             <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Касае:</b> {ticket.get('case_type', '-')}</td>
             </tr>
@@ -315,7 +321,7 @@ def show_ticket_details(ticket, df_complaints_param):
         st.markdown("<br>", unsafe_allow_html=True)
         
         with st.expander("🔗 Резервен вариант (Ако искате мейл само с прост текст)"):
-            plain_text = f"Здравейте,\n\nСигнал от: {ticket.get('client_name', 'Неизвестен')}\nТекущ статус: {current_status}\n\n"
+            plain_text = f"Здравейте,\n\nСигнал от: {ticket.get('client_name', 'Неизвестен')}\nФирма: {ticket.get('Фирма', '-')}\nТекущ статус: {current_status}\n\n"
             if inc_description: plain_text += f"Описание:\n{ticket.get('description', '')}\n\n"
             plain_text += f"Поздрави,\n{st.session_state.username}"
             subject_encoded = urllib.parse.quote(f"Информация за сигнал от клиент: {ticket.get('client_name', 'Неизвестен')}")
@@ -568,13 +574,31 @@ def render_ro_registry():
             show_company_tickets(st.session_state.active_company, df_complaints)
 
     with tab_kanban:
-        st.markdown("### Централизирано управление на активните процеси")
-        kb_comp_filter = st.radio("Покажи сигнали за фирма:", ["Всички"] + COMPANY_LIST, horizontal=True, key="kb_filter")
-        st.markdown("---")
+        st.markdown("### Оперативно управление на сигналите")
+        
+        # Задаване на стриктния ред на фирмите
+        desired_order = ['REN', 'MAS', 'CIM', 'CMX', 'AST', 'BAU', 'RSX']
+        ordered_companies = [c for c in desired_order if c in COMPANY_LIST]
+        ordered_companies += [c for c in COMPANY_LIST if c not in desired_order] # Добавяме останалите, ако има нови
+
+        kb_comp_filter = st.radio("Покажи сигнали за фирма:", ["Всички"] + ordered_companies, horizontal=True, key="kb_filter")
         
         if not df_complaints.empty:
-            df_kb = df_complaints[~df_complaints['current_status'].isin(TERMINAL_STATUSES)].copy()
-            if kb_comp_filter != "Всички": df_kb = df_kb[df_kb['Фирма'] == kb_comp_filter]
+            df_kb_all = df_complaints[~df_complaints['current_status'].isin(TERMINAL_STATUSES)].copy()
+            total_active = len(df_kb_all)
+            comp_counts = df_kb_all['Фирма'].value_counts().to_dict()
+            
+            # Елегантен брояч под радио бутоните
+            stats_str = f"**Неприключени сигнали:** Всички ({total_active})"
+            for c in ordered_companies:
+                stats_str += f" | {c} ({comp_counts.get(c, 0)})"
+                
+            st.markdown(f"<div style='font-size: 0.9em; color: #aaaaaa; margin-top: -10px; margin-bottom: 20px;'>{stats_str}</div>", unsafe_allow_html=True)
+            st.markdown("---")
+            
+            df_kb = df_kb_all.copy()
+            if kb_comp_filter != "Всички": 
+                df_kb = df_kb[df_kb['Фирма'] == kb_comp_filter]
 
             k_col1, k_col2, k_col3 = st.columns(3)
             
@@ -619,7 +643,9 @@ def render_ro_registry():
             with k_col3:
                 st.markdown(f"<h4 style='text-align: center; color: #00aaff;'>Чака приключване ({len(df_col3)})</h4>", unsafe_allow_html=True)
                 for _, r in df_col3.iterrows(): render_kanban_card(r.to_dict(), k_col3)
-        else: st.info("Няма данни за визуализация на Канбан дъската.")
+        else: 
+            st.markdown("---")
+            st.info("Няма данни за визуализация на Канбан дъската.")
 
     with tab_new:
         if st.session_state.user_role == "Администратор":
