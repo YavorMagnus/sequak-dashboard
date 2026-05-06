@@ -20,7 +20,7 @@ def show_ticket_details(ticket, df_complaints_param):
     history_data = history_res.data
     current_status = ticket.get('current_status', 'Чака заключение и препоръка')
     
-    # Сигурно извличане на името на фирмата (оправя бъг 1)
+    # Сигурно извличане на името на фирмата
     company_name = ticket.get('Фирма')
     if not company_name or company_name == '-':
         c_id = ticket.get('company_id')
@@ -34,7 +34,6 @@ def show_ticket_details(ticket, df_complaints_param):
             for _, dup_row in related_df.iterrows():
                 dup_date = pd.to_datetime(dup_row.get('event_datetime')).strftime('%d.%m.%Y')
                 dup_status = dup_row.get('current_status', 'Неопределен')
-                # Сигурно извличане на фирмата и за свързания сигнал
                 dup_comp = dup_row.get('Фирма')
                 if not dup_comp or dup_comp == '-':
                     dup_c_id = dup_row.get('company_id')
@@ -46,7 +45,6 @@ def show_ticket_details(ticket, df_complaints_param):
                     st.info("💡 *Бележка: За да редактирате този свързан сигнал, използвайте Търсачката.*")
             st.markdown("---")
 
-        # Оправяне на бъг 2: Използване на чист HTML за заглавието
         client_name_safe = str(ticket.get('client_name', 'Неизвестен')).strip()
         st.markdown(f"<h3 style='color: #FFD700; margin-bottom: 0px;'>Сигнал от: {client_name_safe}</h3>", unsafe_allow_html=True)
         st.caption(f"Дата: {ticket.get('event_datetime', '')} | Канал: {ticket.get('channel', '')} | Касае: {ticket.get('case_type', '')}")
@@ -228,7 +226,6 @@ def show_ticket_details(ticket, df_complaints_param):
         
         col_data_1, col_chk_1 = st.columns([11, 1])
         with col_data_1:
-            # Оправяне на бъг 2 и тук
             st.markdown(f"<strong style='font-size:1.1em;'>Сигнал от: {client_name_safe}</strong>", unsafe_allow_html=True)
             st.caption(f"Дата: {ticket.get('event_datetime', '')} | Канал: {ticket.get('channel', '')} | Касае: {ticket.get('case_type', '')}")
             sc1, sc2 = st.columns(2)
@@ -602,21 +599,12 @@ def render_ro_registry():
             total_active = len(df_kb_all)
             comp_counts = df_kb_all['Фирма'].value_counts().to_dict()
             
-            # Оправяне на бъг 3: Модерен "секси" брояч с HTML/CSS баджове
-            badges_html = f"""
-            <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: -5px; margin-bottom: 20px;">
-                <div style="background-color: #2a2a2a; border-left: 3px solid #FFD700; padding: 5px 12px; border-radius: 4px; font-size: 0.9em; color: #eee;">
-                    <strong>Всички:</strong> <span style="color: #FFD700; font-weight: bold;">{total_active}</span>
-                </div>
-            """
+            # Оправяне на бъг 3: Сплескан HTML стрин без Markdown конфликти!
+            badges_html = f"<div style='display: flex; flex-wrap: wrap; gap: 10px; margin-top: -5px; margin-bottom: 20px;'><div style='background-color: #2a2a2a; border-left: 3px solid #FFD700; padding: 5px 12px; border-radius: 4px; font-size: 0.9em; color: #eee;'><strong>Всички:</strong> <span style='color: #FFD700; font-weight: bold;'>{total_active}</span></div>"
             for c in ordered_companies:
                 cnt = comp_counts.get(c, 0)
                 color = "#00aaff" if cnt > 0 else "#666666"
-                badges_html += f"""
-                <div style="background-color: #1e1e1e; border: 1px solid #444; padding: 5px 10px; border-radius: 4px; font-size: 0.85em; color: #ccc;">
-                    {c}: <span style="color: {color}; font-weight: bold;">{cnt}</span>
-                </div>
-                """
+                badges_html += f"<div style='background-color: #1e1e1e; border: 1px solid #444; padding: 5px 10px; border-radius: 4px; font-size: 0.85em; color: #ccc;'>{c}: <span style='color: {color}; font-weight: bold;'>{cnt}</span></div>"
             badges_html += "</div>"
             
             st.markdown(badges_html, unsafe_allow_html=True)
