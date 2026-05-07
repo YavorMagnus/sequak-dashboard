@@ -75,38 +75,45 @@ def render_recruitment_module():
                     count = 0
                     errors_log = [] 
                     
-                    with st.spinner("Интелигентен парсинг и запис на файловете..."):
+                    with st.spinner("Интелигентен парсинг (1 ZIP = 1 Кандидат)..."):
                         for uploaded_file in uploaded_files:
                             try:
+                                candidate_text_parts = []
+                                # Взимаме името на ZIP файла като резервно име (запазваме главните букви!)
+                                candidate_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
+                                has_beautiful_name = False
+                                
                                 with zipfile.ZipFile(uploaded_file, "r") as z:
                                     for file_name in z.namelist():
-                                        clean_text = ""
-                                        candidate_name = "Неизвестен"
-                                        source_type = ""
+                                        original_base_name = file_name.split('/')[-1]
+                                        base_name_lower = original_base_name.lower()
                                         
-                                        # ФИЛТЪР ЗА БОКЛУК
-                                        base_name = file_name.split('/')[-1].lower()
-                                        if base_name in ["jobs.bg", "business.jobs.bg", "jobs.bg.html", "business.jobs.bg.html", ""]:
+                                        # Режем само системни шорткъти, но пазим реални HTML файлове
+                                        if base_name_lower in ["jobs.bg", "business.jobs.bg"] or base_name_lower.endswith(".url"):
                                             continue
 
-                                        # 1. Парсване на HTML
-                                        if file_name.lower().endswith((".html", ".htm")):
+                                        clean_text = ""
+
+                                        # 1. Парсване на HTML (Въпросници, съобщения, CV-та)
+                                        if base_name_lower.endswith((".html", ".htm")):
                                             with z.open(file_name) as f:
                                                 html_content = f.read().decode("utf-8", errors="ignore")
                                                 soup = BeautifulSoup(html_content, "html.parser")
+                                                
                                                 for br in soup.find_all("br"): br.replace_with("\n")
                                                 for p in soup.find_all(["p", "div", "tr"]): p.append("\n")
                                                 
+                                                # Опит за извличане на красиво име от заглавието
+                                                extracted_name = soup.title.string.replace("Jobs.bg - ", "").strip() if soup.title else ""
+                                                if extracted_name and extracted_name.lower() not in ["jobs.bg", "business.jobs.bg", "неизвестен"]:
+                                                    candidate_name = extracted_name
+                                                    has_beautiful_name = True
+                                                    
                                                 raw_text = soup.get_text(separator=' ')
                                                 clean_text = html.unescape(raw_text).replace('\xa0', ' ')
                                                 
-                                                extracted_name = soup.title.string.replace("Jobs.bg - ", "").strip() if soup.title else "Неизвестен"
-                                                if extracted_name.lower() in ["jobs.bg", "business.jobs.bg", "неизвестен"]: continue
-                                                candidate_name = extracted_name
-                                                source_type = "Jobs.bg HTML"
-                                                
                                         # 2. Парсване на PDF
-                                        elif file_name.lower().endswith(".pdf"):
+                                        elif base_name_lower.endswith(".pdf"):
                                             with z.open(file_name) as f:
                                                 pdf_reader = PyPDF2.PdfReader(f)
                                                 raw_text = ""
@@ -114,77 +121,76 @@ def render_recruitment_module():
                                                     extracted = page.extract_text()
                                                     if extracted: raw_text += extracted + "\n"
                                                 clean_text = raw_text
-                                                candidate_name = base_name.replace(".pdf", "")
-                                                source_type = "Jobs.bg PDF"
+                                                if not has_beautiful_name:
+                                                    candidate_name = original_base_name.replace(".pdf", "").replace(".PDF", "")
                                                 
                                         # 3. Парсване на Word (.docx)
-                                        elif file_name.lower().endswith(".docx"):
+                                        elif base_name_lower.endswith(".docx"):
                                             with z.open(file_name) as f:
                                                 file_stream = io.BytesIO(f.read())
                                                 doc = docx.Document(file_stream)
                                                 raw_text = "\n".join([para.text for para in doc.paragraphs])
                                                 clean_text = raw_text
-                                                candidate_name = base_name.replace(".docx", "")
-                                                source_type = "Jobs.bg DOCX"
+                                                if not has_beautiful_name:
+                                                    candidate_name = original_base_name.replace(".docx", "").replace(".DOCX", "")
                                                 
-                                        # 4. Парсване на стари Word документи (.doc) - Fallback
-                                        elif file_name.lower().endswith(".doc"):
+                                        # 4. Парсване на стари Word документи (.doc)
+                                        elif base_name_lower.endswith(".doc"):
                                             with z.open(file_name) as f:
                                                 raw_bytes = f.read()
                                                 decoded_text = raw_bytes.decode("utf-8", errors="ignore")
                                                 
-                                                # Проверка за маскиран HTML
                                                 if "<html" in decoded_text.lower() or "jobs.bg" in decoded_text.lower():
                                                     soup = BeautifulSoup(decoded_text, "html.parser")
                                                     for br in soup.find_all("br"): br.replace_with("\n")
                                                     clean_text = html.unescape(soup.get_text(separator=' ')).replace('\xa0', ' ')
-                                                    source_type = "Jobs.bg DOC (HTML Format)"
                                                 else:
-                                                    # Мръсно изстъргване на бинарен файл (взимаме четимия текст)
                                                     text = raw_bytes.decode("windows-1251", errors="ignore")
-                                                    clean_text = re.sub(r'[^\w\s\.,!?-]', ' ', text) # Махаме бинарния боклук
-                                                    source_type = "Jobs.bg DOC (Raw Extraction)"
-                                                
-                                                candidate_name = base_name.replace(".doc", "")
+                                                    clean_text = re.sub(r'[^\w\s\.,!?-]', ' ', text)
+                                                    
+                                                if not has_beautiful_name:
+                                                    candidate_name = original_base_name.replace(".doc", "").replace(".DOC", "")
                                             
-                                        # ЗАЩИТА ПРЕДИ БАЗАТА И УБИЙСТВО НА NULL BYTES (\x00)
+                                        # Финално чистене на текста от файла и добавяне към общия масив
                                         if clean_text:
-                                            # ТОЗИ РЕД СПАСЯВА СИСТЕМАТА ОТ ГРЕШКА 22P05
                                             clean_text = clean_text.replace('\x00', '').replace('\u0000', '')
-                                            
                                             clean_text = re.sub(r' +', ' ', clean_text)
                                             clean_text = re.sub(r'\n\s*\n', '\n\n', clean_text).strip()
                                             
                                             if len(clean_text) > 10: 
-                                                try:
-                                                    candidate_data = {
-                                                        "full_name": candidate_name,
-                                                        "cv_text": clean_text,
-                                                        "source": source_type
-                                                    }
-                                                    res = supabase.table("hr_candidates").insert(candidate_data).execute()
-                                                    
-                                                    if res.data:
-                                                        cand_id = res.data[0]["id"]
-                                                        pos_id_data = supabase.table("hr_positions").select("id").eq("title", target_pos).execute()
-                                                        if pos_id_data.data:
-                                                            supabase.table("hr_applications").insert({
-                                                                "candidate_id": cand_id,
-                                                                "position_id": pos_id_data.data[0]["id"],
-                                                                "status": "Нов"
-                                                            }).execute()
-                                                    count += 1
-                                                except Exception as db_err:
-                                                    errors_log.append(f"❌ Грешка в базата за {candidate_name}: {db_err}")
-                                            else:
-                                                errors_log.append(f"⚠️ {base_name}: Файлът изглежда празен или текстът не може да бъде разчетен.")
+                                                candidate_text_parts.append(clean_text)
+
+                                # СЛЕД КАТО СМЕ ПРОЧЕЛИ ВСИЧКИ ФАЙЛОВЕ В ZIP-А: Сглобяваме ги в един профил
+                                if candidate_text_parts:
+                                    final_cv_text = "\n\n--- ДОПЪЛНИТЕЛЕН ДОКУМЕНТ (Въпросник/Мотивация) ---\n\n".join(candidate_text_parts)
+                                    
+                                    candidate_data = {
+                                        "full_name": candidate_name,
+                                        "cv_text": final_cv_text,
+                                        "source": "Jobs.bg ZIP Archive"
+                                    }
+                                    
+                                    res = supabase.table("hr_candidates").insert(candidate_data).execute()
+                                    
+                                    if res.data:
+                                        cand_id = res.data[0]["id"]
+                                        pos_id_data = supabase.table("hr_positions").select("id").eq("title", target_pos).execute()
+                                        if pos_id_data.data:
+                                            supabase.table("hr_applications").insert({
+                                                "candidate_id": cand_id,
+                                                "position_id": pos_id_data.data[0]["id"],
+                                                "status": "Нов"
+                                            }).execute()
+                                    count += 1
+                                else:
+                                    errors_log.append(f"⚠️ Архивът {uploaded_file.name} изглежда празен или не съдържа четими CV формати.")
 
                             except Exception as zip_err:
                                 errors_log.append(f"❌ Грешка при отваряне на архив {uploaded_file.name}: {zip_err}")
 
                     # Финален репорт
                     if count > 0:
-                        st.success(f"🎉 Успешно импортирани {count} кандидати!")
+                        st.success(f"🎉 Успешно създадени {count} пълни профили на кандидати!")
                     else:
                         st.warning("⚠️ Не бяха импортирани кандидати. Проверете детайлите по-долу.")
                         
@@ -242,8 +248,8 @@ def render_recruitment_module():
                                                 supabase.table("hr_applications").update({"status": new_status}).eq("id", app["id"]).execute()
                                                 st.rerun()
                                         
-                                        with st.popover("📄 Прочети оригинално CV", use_container_width=True):
-                                            st.markdown(f"### Оригинално CV на {cand_name}")
+                                        with st.popover("📄 Прочети пълно досие (CV + Въпросници)", use_container_width=True):
+                                            st.markdown(f"### Пълно досие на {cand_name}")
                                             st.markdown("---")
                                             st.markdown(formatted_cv)
                                         
