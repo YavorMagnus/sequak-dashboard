@@ -1,347 +1,167 @@
 import streamlit as st
 import pandas as pd
+from utils import supabase, check_permission
 import zipfile
 import io
+from bs4 import BeautifulSoup
+import PyPDF2
 import re
-import datetime
-import time
-from utils import supabase, COMPANY_MAP, COMPANY_LIST, check_permission
 
-# Опит за импорт на PyPDF2 за четене на PDF-и (ако е инсталиран)
-try:
-    import PyPDF2
-    HAS_PYPDF = True
-except ImportError:
-    HAS_PYPDF = False
+# ЗАБЕЛЕЖКА: Gemini API Key трябва да бъде добавен в st.secrets за сигурност
+# import google.generativeai as genai
 
-def sanitize_text(text):
-    """Премахва абсолютно всякакви невидими системни символи, които чупят базата данни"""
-    if not text: return ""
-    return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', str(text))
+def recruitment_module():
+    st.header("📋 Модул Рекрутмънт и Подбор (ATS)")
 
-def extract_text_from_html(html_content):
-    """Изчиства HTML тагове и оставя само чистия текст"""
-    text = re.sub(r'<style.*?>.*?</style>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<script.*?>.*?</script>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<[^>]+>', ' ', text)
-    return ' '.join(text.split())
+    if not check_permission("recruitment_view"):
+        st.error("Нямате достъп до този модул.")
+        return
 
-def extract_text_from_pdf(pdf_bytes):
-    """Извлича текст от PDF файл"""
-    if not HAS_PYPDF: return "PDF съдържание (нужна е PyPDF2 библиотека)."
-    try:
-        reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
-        text = ""
-        for page in reader.pages:
-            extracted = page.extract_text()
-            if extracted:
-                text += extracted + "\n"
-        return ' '.join(text.split())
-    except Exception:
-        return "Грешка при четене на PDF."
+    tabs = st.tabs(["📊 Канбан", "👥 База Кандидати", "💼 Позиции", "📥 Внос (Jobs.bg)", "⚙️ Настройки"])
 
-def parse_candidate_zip(zip_bytes, filename):
-    """САМО РАЗОПАКОВА И ЧЕТЕ ТЕКСТА - БЕЗ ДА ПИПА БАЗАТА ДАННИ"""
-    cv_text_full = ""
-    candidate_name = filename.replace('.zip', '').replace('_', ' ').split(' 0')[0].title()
-    
-    try:
-        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
-            for file_info in z.infolist():
-                if file_info.filename.endswith('.html'):
-                    html_content = z.read(file_info.filename).decode('utf-8', errors='ignore')
-                    cv_text_full += extract_text_from_html(html_content) + "\n\n"
-                elif file_info.filename.endswith('.pdf'):
-                    pdf_bytes = z.read(file_info.filename)
-                    cv_text_full += extract_text_from_pdf(pdf_bytes) + "\n\n"
-    except Exception as e:
-        return None, f"Грешка при четене на ZIP архива на {candidate_name}: {e}"
+    # --- ТАБ: ПОЗИЦИИ ---
+    with tabs[2]:
+        st.subheader("Управление на отворени позиции")
+        with st.form("add_position"):
+            pos_name = st.text_input("Име на позицията (напр. Механик, Търговски представител)")
+            pos_req = st.text_area("Изисквания (Матрица за AI оценка)")
+            submit_pos = st.form_submit_button("Създай позиция")
 
-    if not cv_text_full.strip():
-        return None, f"Не бе намерен четим текст (HTML/PDF) в архива на {candidate_name}."
-
-    # БРУТАЛНО ИЗЧИСТВАНЕ НА ТЕКСТА (Sanitization)
-    cv_text_full = sanitize_text(cv_text_full)
-
-    # Извличане на Имейл и Телефон чрез Regex
-    email_match = re.search(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', cv_text_full)
-    phone_match = re.search(r'(\+359|0)[0-9\s-]{8,12}', cv_text_full)
-    
-    email = email_match.group(0) if email_match else f"unknown_{datetime.datetime.now().timestamp()}@noemail.com"
-    phone = phone_match.group(0).strip() if phone_match else "Не е намерен"
-
-    return {
-        "full_name": candidate_name,
-        "email": email,
-        "phone": phone,
-        "cv_text": cv_text_full
-    }, "ОК"
-
-def render_recruitment_module():
-    st.title("🎯 Рекрутмънт и Подбор")
-    st.markdown("Модул за централизирано управление на позиции, кандидати и интервюта.")
-    
-    tab_board, tab_import, tab_db = st.tabs(["📋 Позиции и Канбан", "📥 Внос на Кандидати", "🗄️ База Кандидати"])
-
-    # Изтегляне на активните позиции
-    try:
-        pos_res = supabase.table("hr_positions").select("*, companies(code)").eq("status", "Активна").execute()
-        df_positions = pd.DataFrame(pos_res.data)
-        if not df_positions.empty:
-            df_positions['company_code'] = df_positions['companies'].apply(lambda x: x.get('code', '') if isinstance(x, dict) else '')
-    except Exception as e:
-        st.error(f"Грешка при връзка с базата: {e}")
-        df_positions = pd.DataFrame()
-
-    # --- ТАБ 1: ПОЗИЦИИ И КАНБАН ---
-    with tab_board:
-        if check_permission("recruitment", "manage_positions"):
-            with st.expander("➕ Създаване на нова отворена позиция"):
-                with st.form("new_position_form", clear_on_submit=True):
-                    p_col1, p_col2 = st.columns(2)
-                    with p_col1:
-                        p_title = st.text_input("Име на позицията *")
-                        p_comp = st.selectbox("За фирма *", COMPANY_LIST)
-                    with p_col2:
-                        p_priority = st.selectbox("Приоритет", ["Пожар", "Спешно", "Нормално", "Просто се оглеждаме"], index=2)
-                        p_assignee = st.text_input("Отговорник (Reassign)", value=st.session_state.username)
-                    
-                    p_reqs = st.text_area("Матрица с изисквания (Скрито за кандидати, чете се от AI) *", height=100)
-                    
-                    if st.form_submit_button("Създай Позиция", type="primary"):
-                        if not p_title or not p_reqs: st.error("Попълнете задължителните полета!")
-                        else:
-                            c_id = COMPANY_MAP.get(p_comp)
-                            supabase.table("hr_positions").insert({
-                                "title": p_title, "company_id": c_id, "priority": p_priority,
-                                "requirements_matrix": p_reqs, "assignee": p_assignee
-                            }).execute()
-                            st.success("✅ Позицията е отворена!")
-                            st.rerun()
-            st.markdown("---")
-
-        if df_positions.empty:
-            st.info("Няма активни позиции в момента.")
-        else:
-            st.subheader("Активни позиции (Канбан)")
-            
-            pos_dict = {f"[{r['company_code']}] {r['title']} ({r['priority']})": r['id'] for _, r in df_positions.iterrows()}
-            selected_pos_name = st.selectbox("Изберете позиция за разглеждане:", list(pos_dict.keys()))
-            selected_pos_id = pos_dict[selected_pos_name]
-
-            app_res = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("position_id", selected_pos_id).execute()
-            df_apps = pd.DataFrame(app_res.data)
-
-            if df_apps.empty:
-                st.info("Все още няма кандидати за тази позиция.")
-            else:
-                st.markdown("<br>", unsafe_allow_html=True)
-                col_new, col_approved, col_interview = st.columns(3)
-                
-                def render_candidate_card(app, col):
-                    cand = app.get('hr_candidates', {})
-                    name = cand.get('full_name', 'Неизвестен')
-                    email = cand.get('email', '')
-                    phone = cand.get('phone', '')
-                    
-                    card_html = f"""
-                    <div style="background-color: #2a2a2a; border-left: 4px solid #00aaff; padding: 12px; margin-bottom: 10px; border-radius: 5px;">
-                        <strong style="color: #FFD700; font-size: 1.1em;">{name}</strong><br>
-                        <span style="color: #ccc; font-size: 0.85em;">📞 {phone} | ✉️ {email}</span>
-                    </div>
-                    """
-                    with col:
-                        st.markdown(card_html, unsafe_allow_html=True)
-                        if st.button("Отвори Картон", key=f"btn_app_{app['id']}", use_container_width=True):
-                            st.session_state.active_candidate_app = app
-                            st.rerun()
-
-                apps_new = df_apps[df_apps['kanban_status'] == 'Ново CV']
-                apps_ai = df_apps[df_apps['kanban_status'] == 'Одобрен']
-                apps_int = df_apps[df_apps['kanban_status'] == 'Интервю']
-
-                with col_new:
-                    st.markdown(f"<h4 style='text-align:center;'>Нови ({len(apps_new)})</h4>", unsafe_allow_html=True)
-                    for _, row in apps_new.iterrows(): render_candidate_card(row.to_dict(), col_new)
-                with col_approved:
-                    st.markdown(f"<h4 style='text-align:center;'>Одобрени ({len(apps_ai)})</h4>", unsafe_allow_html=True)
-                    for _, row in apps_ai.iterrows(): render_candidate_card(row.to_dict(), col_approved)
-                with col_interview:
-                    st.markdown(f"<h4 style='text-align:center;'>За Интервю ({len(apps_int)})</h4>", unsafe_allow_html=True)
-                    for _, row in apps_int.iterrows(): render_candidate_card(row.to_dict(), col_interview)
-
-            # HARD DELETE ЗОНА ЗА ПОЗИЦИЯТА (САМО ЗА СУПЕР-АДМИН)
-            if st.session_state.user_role == "Супер-админ":
-                st.markdown("<br><br>", unsafe_allow_html=True)
-                with st.expander("☢️ Опасна зона: Hard Delete на Позицията"):
-                    st.error("Внимание! Изтриването на позицията ще изтрие и всички нейни Канбан-картончета (кандидатури). Самите хора ще останат в базата (Архив).")
-                    if st.button("❌ ИЗТРИЙ ТАЗИ ПОЗИЦИЯ НАПЪЛНО", key=f"del_pos_{selected_pos_id}", type="primary"):
-                        try:
-                            supabase.table("hr_positions").delete().eq("id", selected_pos_id).execute()
-                            st.success("✅ Позицията беше изтрита успешно!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Грешка при изтриване: {e}")
-
-    # --- КАРТОН НА КАНДИДАТА (ДИАЛОГ) ---
-    if 'active_candidate_app' in st.session_state:
-        @st.dialog("Картон на Кандидата", width="large")
-        def show_candidate_dialog():
-            app = st.session_state.active_candidate_app
-            cand = app.get('hr_candidates', {})
-            
-            st.markdown(f"<h2 style='color:#FFD700; margin-bottom:0;'>{cand.get('full_name')}</h2>", unsafe_allow_html=True)
-            st.caption(f"📞 {cand.get('phone')} | ✉️ {cand.get('email')}")
-            st.markdown("---")
-            
-            t_cv, t_notes = st.tabs(["📄 Извлечено CV", "✍️ Бележки и Решения"])
-            
-            with t_cv:
-                st.markdown("<div style='background-color:#1e1e1e; padding:15px; border-radius:5px; max-height: 400px; overflow-y: auto;'>", unsafe_allow_html=True)
-                st.write(cand.get('cv_text', 'Няма текст'))
-                st.markdown("</div>", unsafe_allow_html=True)
-                
-            with t_notes:
-                new_status = st.selectbox("Смени Канбан Статус", ["Ново CV", "Одобрен", "Интервю", "Отхвърлен"], index=["Ново CV", "Одобрен", "Интервю", "Отхвърлен"].index(app.get('kanban_status', 'Ново CV')))
-                
-                st.markdown("**AI Оценка:**")
-                st.info(app.get('ai_evaluation') or "Все още няма AI оценка.")
-                if check_permission("recruitment", "evaluate"):
-                    if st.button("✨ Генерирай AI Оценка (Очаква Gemini API)"):
-                        st.warning("Интеграцията с Gemini API предстои. Засега полето е ръчно.")
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                r_notes = st.text_area("Бележки на Рекрутъра", value=app.get('recruiter_notes') or "")
-                
-                # Червеният телефон
-                if check_permission("ro_registry", "export"): # Условна проверка за висш мениджмънт
-                    c_notes = st.text_area("Поверителни бележки (Червен телефон)", value=app.get('confidential_notes') or "")
-                else:
-                    c_notes = app.get('confidential_notes')
-
-                if st.button("💾 Запази промените по картона", type="primary"):
-                    supabase.table("hr_applications").update({
-                        "kanban_status": new_status,
-                        "recruiter_notes": r_notes,
-                        "confidential_notes": c_notes
-                    }).eq("id", app['id']).execute()
-                    del st.session_state.active_candidate_app
-                    st.rerun()
-                    
-            if st.button("✖ Затвори"):
-                del st.session_state.active_candidate_app
+            if submit_pos and pos_name:
+                supabase.table("hr_positions").insert({"title": pos_name, "requirements": pos_req}).execute()
+                st.success("Позицията е създадена!")
                 st.rerun()
-                
-            # HARD DELETE ЗОНА ЗА КАНДИДАТА (САМО ЗА СУПЕР-АДМИН)
-            if st.session_state.user_role == "Супер-админ":
-                st.markdown("---")
-                with st.expander("☢️ Опасна зона: Hard Delete на Кандидата"):
-                    st.error("Внимание! Това ще изтрие този човек от ЦЯЛАТА система завинаги, включително историята му от други позиции.")
-                    if st.button("❌ ИЗТРИЙ ТОЗИ КАНДИДАТ НАПЪЛНО", key=f"del_cand_{cand['id']}", type="primary"):
-                        try:
-                            supabase.table("hr_candidates").delete().eq("id", cand['id']).execute()
-                            del st.session_state.active_candidate_app
-                            st.success("✅ Кандидатът беше изтрит успешно!")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Грешка при изтриване: {e}")
 
-        show_candidate_dialog()
+        positions_df = supabase.table("hr_positions").select("*").limit(100000).execute()
+        if positions_df.data:
+            df_p = pd.DataFrame(positions_df.data)
+            st.table(df_p[["title", "requirements", "created_at"]])
 
-    # --- ТАБ 2: ВНОС НА КАНДИДАТИ (РЕД ПО РЕД ЗАЩИТА) ---
-    with tab_import:
-        if check_permission("recruitment", "upload_candidates"):
-            st.subheader("📥 Внос на кандидати от jobs.bg")
-            if df_positions.empty:
-                st.warning("Първо трябва да създадете активна позиция, към която да закачите кандидатите.")
-            else:
-                pos_dict_import = {f"[{r['company_code']}] {r['title']}": r['id'] for _, r in df_positions.iterrows()}
-                target_pos = st.selectbox("Към коя позиция да се закачат кандидатите?", list(pos_dict_import.keys()))
-                target_pos_id = pos_dict_import[target_pos]
+    # --- ТАБ: ВНОС ---
+    with tabs[3]:
+        st.subheader("Масово качване на кандидати от Jobs.bg (ZIP)")
+        target_pos = st.selectbox("Избери позиция за вноса", [p["title"] for p in positions_df.data] if positions_df.data else ["Няма активни позиции"])
+        uploaded_file = st.file_uploader("Качи ZIP архив", type="zip")
 
-                uploaded_files = st.file_uploader("Маркирайте и пуснете ZIP файловете тук", type="zip", accept_multiple_files=True)
-                
-                if uploaded_files:
-                    if st.button("🚀 Обработи и Качи в Базата", type="primary"):
-                        
-                        status_text = st.empty()
-                        progress_bar = st.progress(0, text="Стъпка 1: Разопаковане и четене на ZIP файловете...")
-                        
-                        # --- СТЪПКА 1: ПАРСВАНЕ (БЕЗ ДА ПИПАМЕ БАЗАТА) ---
-                        parsed_candidates = []
-                        for i, file in enumerate(uploaded_files):
-                            cand_dict, msg = parse_candidate_zip(file.getvalue(), file.name)
-                            if cand_dict:
-                                parsed_candidates.append(cand_dict)
-                            else:
-                                st.warning(msg)
-                            progress_bar.progress((i + 1) / len(uploaded_files), text=f"Четене: {i+1} от {len(uploaded_files)}...")
-
-                        # --- СТЪПКА 2: КАЧВАНЕ В БАЗАТА (РЕД ПО РЕД СЪС ЗАЩИТА) ---
-                        if parsed_candidates:
-                            status_text.info(f"Приключено четенето. Започва проверка и качване на {len(parsed_candidates)} записа...")
-                            time.sleep(1)
+        if uploaded_file and st.button("Стартирай импорт"):
+            with zipfile.ZipFile(uploaded_file, "r") as z:
+                count = 0
+                for file_name in z.namelist():
+                    if file_name.endswith((".html", ".htm")):
+                        with z.open(file_name) as f:
+                            html_content = f.read().decode("utf-8")
+                            soup = BeautifulSoup(html_content, "html.parser")
                             
-                            success_count = 0
-                            skip_count = 0
-                            error_count = 0
+                            # По-добро структуриране на текста чрез запазване на нови редове от блокови елементи
+                            for br in soup.find_all("br"):
+                                br.replace_with("\n")
+                            for p in soup.find_all(["p", "div", "tr"]):
+                                p.append("\n")
                             
-                            for i, cand in enumerate(parsed_candidates):
-                                progress_bar.progress((i + 1) / len(parsed_candidates), text=f"Запис в базата: {i+1} от {len(parsed_candidates)} ({cand['full_name']})")
+                            raw_text = soup.get_text(separator=' ')
+                            # Почистване на излишни празни пространства, но запазване на единични нови редове
+                            clean_text = re.sub(r' +', ' ', raw_text)
+                            clean_text = re.sub(r'\n\s*\n', '\n\n', clean_text).strip()
+                            
+                            # Опит за извличане на Име (базирано на заглавие в jobs.bg структура)
+                            candidate_name = soup.title.string.replace("Jobs.bg - ", "") if soup.title else "Неизвестен"
+                            
+                            # Запис в hr_candidates (Дедубликация по име/телефон се прави в базата чрез Unique Constraint)
+                            try:
+                                candidate_data = {
+                                    "full_name": candidate_name,
+                                    "cv_text": clean_text,
+                                    "source": "Jobs.bg ZIP"
+                                }
+                                res = supabase.table("hr_candidates").upsert(candidate_data, on_conflict="full_name").execute()
                                 
-                                try:
-                                    # Проверка дали съществува
-                                    cand_res = supabase.table("hr_candidates").select("id").eq("email", cand['email']).execute()
-                                    
-                                    if cand_res.data:
-                                        cand_id = cand_res.data[0]['id']
-                                        supabase.table("hr_candidates").update({"cv_text": cand['cv_text'], "phone": cand['phone']}).eq("id", cand_id).execute()
-                                    else:
-                                        new_cand = supabase.table("hr_candidates").insert({
-                                            "full_name": cand['full_name'], "email": cand['email'],
-                                            "phone": cand['phone'], "cv_text": cand['cv_text']
-                                        }).execute()
-                                        cand_id = new_cand.data[0]['id']
-
-                                    # Проверка за дублирана кандидатура за позицията
-                                    app_res = supabase.table("hr_applications").select("id").eq("candidate_id", cand_id).eq("position_id", target_pos_id).execute()
-                                    
-                                    if app_res.data:
-                                        skip_count += 1
-                                        st.info(f"ℹ️ {cand['full_name']} вече е кандидатствал за тази позиция (Пропуснат).")
-                                    else:
+                                # Закачане към позицията (Application)
+                                if res.data:
+                                    cand_id = res.data[0]["id"]
+                                    pos_id_data = supabase.table("hr_positions").select("id").eq("title", target_pos).execute()
+                                    if pos_id_data.data:
                                         supabase.table("hr_applications").insert({
-                                            "candidate_id": cand_id, "position_id": target_pos_id, "kanban_status": "Ново CV"
+                                            "candidate_id": cand_id,
+                                            "position_id": pos_id_data.data[0]["id"],
+                                            "status": "Нов"
                                         }).execute()
-                                        success_count += 1
-                                        
-                                except Exception as e:
-                                    error_count += 1
-                                    st.error(f"❌ Грешка при запис на {cand['full_name']}. Детайл: {e}")
-                                    
-                            progress_bar.empty()
-                            status_text.success(f"✅ Процесът приключи! Успешно добавени: {success_count} | Обновени дубликати: {skip_count} | Грешки: {error_count}")
-                            time.sleep(3)
-                            st.rerun()
-        else:
-            st.info("Нямате права за внос на кандидати.")
+                                count += 1
+                            except Exception as e:
+                                continue
+                st.success(f"Успешно обработени {count} кандидати!")
 
-    # --- ТАБ 3: БАЗА КАНДИДАТИ ---
-    with tab_db:
-        st.subheader("🗄️ Търсачка в Архива (Всички кандидати)")
-        search_q = st.text_input("Търсене по ключова дума в CV-тата (напр. 'строителна техника', 'Английски', 'Перник')")
-        
-        if search_q:
-            try:
-                res_search = supabase.table("hr_candidates").select("*").ilike("cv_text", f"%{search_q}%").execute()
-                df_search = pd.DataFrame(res_search.data)
+    # --- ТАБ: КАНБАН ---
+    with tabs[0]:
+        st.subheader("Процес по подбор")
+        if positions_df.data:
+            selected_kanban_pos = st.selectbox("Филтър по позиция", [p["title"] for p in positions_df.data], key="kanban_filter")
+            
+            # Взимане на апликациите
+            apps_query = supabase.table("hr_applications").select("*, hr_candidates(full_name, cv_text), hr_positions(title, requirements)").limit(100000).execute()
+            
+            if apps_query.data:
+                apps_df = pd.DataFrame(apps_query.data)
+                # Филтриране по избрана позиция
+                apps_df = apps_df[apps_df['hr_positions'].apply(lambda x: x['title'] == selected_kanban_pos)]
                 
-                if df_search.empty:
-                    st.write("Няма намерени кандидати с тази ключова дума.")
-                else:
-                    st.write(f"Намерени **{len(df_search)}** съвпадения:")
-                    for _, cand in df_search.iterrows():
-                        with st.expander(f"👤 {cand['full_name']} | 📞 {cand['phone']}"):
-                            st.write(cand['cv_text'][:500] + "... [вижте повече в Канбана]")
-            except Exception as e:
-                st.error("Грешка при търсене.")
+                cols = st.columns(4)
+                statuses = ["Нов", "Интервю", "Одобрен", "Отхвърлен"]
+                
+                for i, status in enumerate(statuses):
+                    with cols[i]:
+                        st.markdown(f"**{status}**")
+                        status_apps = apps_df[apps_df["status"] == status]
+                        for _, app in status_apps.iterrows():
+                            with st.expander(f"👤 {app['hr_candidates']['full_name']}"):
+                                st.write(f"ID: {app['id']}")
+                                
+                                # Смяна на статус
+                                new_status = st.selectbox("Промени статус", statuses, index=statuses.index(status), key=f"status_{app['id']}")
+                                if new_status != status:
+                                    supabase.table("hr_applications").update({"status": new_status}).eq("id", app["id"]).execute()
+                                    st.rerun()
+
+                                # --- AI ОЦЕНКА И КАРТОН ---
+                                if st.button("✨ Генерирай AI Оценка", key=f"ai_{app['id']}"):
+                                    st.info("Връзка с Gemini API... (Тук се изпраща CV + Изисквания)")
+                                    
+                                    # ЛОГИКА ЗА GEMINI (Подготовка):
+                                    # prompt = f"Сравни CV: {app['hr_candidates']['cv_text']} с Изисквания: {app['hr_positions']['requirements']}. Дай оценка 1-10 и кратък коментар."
+                                    # response = model.generate_content(prompt)
+                                    # supabase.table("hr_applications").update({"ai_score": response.text}).eq("id", app["id"]).execute()
+                                    
+                                    # За момента симулираме запис:
+                                    mock_ai = "Оценка: 8/10. Кандидатът има отличен опит с хидравлика, но липсва опит в онлайн ритейла."
+                                    supabase.table("hr_applications").update({"ai_score": mock_ai}).eq("id", app["id"]).execute()
+                                    st.success("Оценката е генерирана!")
+                                    st.rerun()
+
+                                if app.get("ai_score"):
+                                    st.info(f"AI Анализ: {app['ai_score']}")
+
+                                if st.checkbox("Виж извлечено CV", key=f"cv_{app['id']}"):
+                                    # Показване на CV със запазено форматиране
+                                    st.text_area("Текст от CV (структуриран):", value=app['hr_candidates']['cv_text'], height=300)
+
+    # --- ТАБ: БАЗА КАНДИДАТИ ---
+    with tabs[1]:
+        st.subheader("Всички кандидати в системата")
+        candidates_data = supabase.table("hr_candidates").select("*").limit(100000).execute()
+        if candidates_data.data:
+            df_c = pd.DataFrame(candidates_data.data)
+            st.dataframe(df_c[["full_name", "source", "created_at"]])
+            
+    # --- ОПАСНА ЗОНА (СУПЕР-АДМИН) ---
+    with tabs[4]:
+        st.subheader("Административни настройки")
+        if st.session_state.get("user_role") == "Супер-админ":
+            st.warning("Внимание: Hard Delete зона")
+            if st.button("Изчисти всички тестови кандидати"):
+                # Тук се добавя логика за изтриване
+                st.error("Функцията е деактивирана за сигурност. Свържете се с CTO.")
+        else:
+            st.info("Само за Супер-админ")
+
+# Стартиране на модула (ако се вика директно за тест)
+if __name__ == "__main__":
+    recruitment_module()
