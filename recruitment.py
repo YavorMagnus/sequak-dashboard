@@ -34,7 +34,7 @@ def clean_html_text(html_bytes):
     text = text.replace('\n', '  \n')
     return text.strip()
 
-# --- ХАКЕРСКИ ПАРСЪР (V10 - С КЛОПКА ЗА СТАРИ .DOC ФАЙЛОВИ) ---
+# --- ХАКЕРСКИ ПАРСЪР (V11 - БЛОКИРАНЕ НА ТРОЯНСКИЯ КОН) ---
 def parse_jobs_zip(uploaded_file):
     raw_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
     name_no_dates = re.sub(r'_[0-9]{2}\.[0-9]{2}\.[0-9]{4}.*', '', raw_name)
@@ -42,10 +42,7 @@ def parse_jobs_zip(uploaded_file):
     if not clean_name: clean_name = raw_name 
     
     cv_data = {"questionnaire": "Няма прикачен въпросник.", "notes": "Няма намерени бележки.", "cv_text": "Няма намерен текст на CV."}
-    photo_base64 = None
-    has_document_cv = False
-    has_legacy_doc = False
-    html_profile_text = ""
+    photo_base64, has_document_cv, has_legacy_doc, html_profile_text = None, False, False, ""
     
     with zipfile.ZipFile(uploaded_file, "r") as z:
         for file_name in z.namelist():
@@ -63,24 +60,30 @@ def parse_jobs_zip(uploaded_file):
             is_img = lower_name.endswith((".jpg", ".jpeg", ".png")) or file_bytes.startswith(b"\xFF\xD8\xFF") or file_bytes.startswith(b"\x89PNG")
             
             if is_doc:
-                has_legacy_doc = True
+                has_legacy_doc = True  
                 
             if is_img and not photo_base64:
                 photo_base64 = base64.b64encode(file_bytes).decode("utf-8")
                 
             elif is_html:
                 html_str = file_bytes.decode("utf-8", errors="ignore")
-                if "cv-preview" in html_str:
-                    html_profile_text = clean_html_text(file_bytes)
-                elif "Въпросник" in html_str or "Questionnaire" in html_str or "questionnaire" in lower_name:
+                
+                # 1. Търсим Въпросник
+                if "Въпросник" in html_str or "Questionnaire" in html_str or "questionnaire" in lower_name:
                     text_content = clean_html_text(file_bytes)
                     idx = text_content.find("Въпросник") if text_content.find("Въпросник") != -1 else text_content.find("Questionnaire")
                     if idx != -1: text_content = text_content[idx:]
                     text_content = re.sub(r'\s*(\d+\.\s)', r'\n\n\1', text_content)
                     text_content = re.sub(r'(\?[*]?)\s+(.*)', r'\1 **\2**', text_content)
                     cv_data["questionnaire"] = text_content.replace('\n', '  \n')
+                    
+                # 2. Търсим Бележки
                 elif "Бележки" in html_str or "Notes" in html_str or "notes" in lower_name: 
                     cv_data["notes"] = clean_html_text(file_bytes)
+                    
+                # 3. Търсим Истинския Профил (Черен списък за служебния индекс файл!)
+                elif "cv-preview" in html_str and "Кандидатура в Jobs.bg" not in html_str and "Application in Jobs.bg" not in html_str:
+                    html_profile_text = clean_html_text(file_bytes)
                     
             elif is_pdf:
                 try:
@@ -107,6 +110,7 @@ def parse_jobs_zip(uploaded_file):
                         has_document_cv = True
                 except: pass
 
+    # РЕШАВАНЕ КАКВО ДА ПОКАЖЕМ В CV ТАБА
     if not has_document_cv:
         if html_profile_text: 
             cv_data["cv_text"] = html_profile_text
