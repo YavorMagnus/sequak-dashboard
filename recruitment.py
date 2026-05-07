@@ -5,8 +5,9 @@ import zipfile
 import io
 import json
 import base64
-import fitz  # PyMuPDF за четене на PDF и вадене на снимки
+import fitz  # PyMuPDF
 from bs4 import BeautifulSoup
+import re
 
 # --- ТВОИТЕ ФИРМИ ---
 COMPANIES = [
@@ -16,37 +17,66 @@ COMPANIES = [
     "Холдинг Център"
 ]
 
-# --- УМНИЯТ ПАРСЪР (Функция) ---
+# --- ПОМОЩНА ФУНКЦИЯ ЗА ЧИСТЕНЕ НА HTML ---
+def clean_html_text(html_bytes):
+    soup = BeautifulSoup(html_bytes.decode("utf-8", errors="ignore"), "html.parser")
+    for br in soup.find_all("br"):
+        br.replace_with("\n")
+    for p in soup.find_all("p"):
+        p.insert_after("\n\n")
+    return soup.get_text(separator=' ', strip=True)
+
+# --- УМНИЯТ ПАРСЪР V2 ---
 def parse_jobs_zip(uploaded_file):
+    # 1. Изчистване на Франкенщайн името
     raw_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
-    candidate_name = raw_name.replace('_', ' ').strip()
+    # Премахва дати/часове в края (напр. _06.05.2026_16.07)
+    name_no_dates = re.sub(r'_[0-9]{2}\.[0-9]{2}\.[0-9]{4}.*', '', raw_name)
+    # Премахва стартови ID-та (напр. 187079627_)
+    clean_name = re.sub(r'^[0-9]+_', '', name_no_dates).replace('_', ' ').strip()
+    if not clean_name: clean_name = raw_name # Резервен вариант
     
     cv_data = {
-        "questionnaire": "Няма намерен въпросник.",
+        "questionnaire": "Няма прикачен въпросник.",
         "notes": "Няма намерени бележки.",
         "cv_text": "Няма намерен текст на CV.",
     }
     photo_base64 = None
+    has_pdf_cv = False
+    html_profile_text = ""
 
     with zipfile.ZipFile(uploaded_file, "r") as z:
         for file_name in z.namelist():
             lower_name = file_name.split('/')[-1].lower()
             if lower_name.endswith(".url") or lower_name in ["jobs.bg", "business.jobs.bg"]: 
                 continue
-            
-            # Четене на HTML (Въпросници и Бележки)
-            if lower_name.endswith((".html", ".htm")):
+                
+            # Търсим самостоятелна картинка (Случаят Любо)
+            if lower_name.endswith((".jpg", ".jpeg", ".png")) and not photo_base64:
                 with z.open(file_name) as f:
-                    html_content = f.read().decode("utf-8", errors="ignore")
-                    soup = BeautifulSoup(html_content, "html.parser")
-                    text_content = soup.get_text(separator='\n', strip=True)
+                    photo_base64 = base64.b64encode(f.read()).decode("utf-8")
+            
+            # Четене на HTML (Въпросници, Бележки или Профил-заместник)
+            elif lower_name.endswith((".html", ".htm")):
+                with z.open(file_name) as f:
+                    text_content = clean_html_text(f.read())
                     
-                    if "въпрос" in text_content.lower() or "question" in text_content.lower():
-                        cv_data["questionnaire"] = text_content
+                    if "въпросник" in lower_name or "questionnaire" in lower_name:
+                        # Режем служебния хедър
+                        idx = text_content.find("Въпросник")
+                        if idx != -1: text_content = text_content[idx:]
+                        cv_data["questionnaire"] = text_content.replace('\n', '\n\n')
+                        
+                    elif "notes" in lower_name or "бележки" in lower_name:
+                        cv_data["notes"] = text_content.replace('\n', '\n\n')
+                        
                     else:
-                        cv_data["notes"] = text_content
+                        # Това вероятно е основният профил (Резервното CV на Любо)
+                        idx = text_content.find("Кандидатура в Jobs.bg")
+                        if idx != -1: text_content = text_content[idx:]
+                        html_profile_text = text_content.replace('\n', '  \n')
 
-            # Четене на PDF (Текст и Снимки)
+            # Четене на PDF (Случаят Елица)
             elif lower_name.endswith(".pdf"):
                 with z.open(file_name) as f:
                     pdf_bytes = f.read()
@@ -54,8 +84,11 @@ def parse_jobs_zip(uploaded_file):
                         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
                         pdf_text = ""
                         for page in doc:
-                            pdf_text += page.get_text() + "\n"
-                            # Опит за вадене на първата снимка
+                            # Извличане на текст с Markdown параграфи
+                            page_text = page.get_text()
+                            pdf_text += page_text.replace('\n', '  \n') + "\n\n"
+                            
+                            # Вадене на снимка от PDF (Ако вече не сме намерили .jpg)
                             if not photo_base64:
                                 images = page.get_images(full=True)
                                 if images:
@@ -63,11 +96,17 @@ def parse_jobs_zip(uploaded_file):
                                     base_image = doc.extract_image(xref)
                                     image_bytes = base_image["image"]
                                     photo_base64 = base64.b64encode(image_bytes).decode("utf-8")
+                                    
                         cv_data["cv_text"] = pdf_text.strip()
+                        has_pdf_cv = True
                     except Exception as e:
-                        cv_data["cv_text"] = f"Грешка при четене на PDF: {e}"
+                        pass # Игнорираме грешката и ще разчитаме на HTML профила
 
-    return candidate_name, cv_data, photo_base64
+    # Ако няма PDF CV, пълним таба с HTML профила
+    if not has_pdf_cv and html_profile_text:
+        cv_data["cv_text"] = html_profile_text
+        
+    return clean_name.title(), cv_data, photo_base64
 
 # --- THE MODAL: ГОЛЕМИЯТ КАРТОН ---
 @st.dialog("📄 Картон на кандидата", width="large")
@@ -96,9 +135,9 @@ def open_candidate_card(candidate_id, candidate_name, status, raw_cv_data, photo
     
     cv_dict = raw_cv_data if isinstance(raw_cv_data, dict) else {}
     
-    with tabs[0]: st.write(cv_dict.get("questionnaire", "Няма данни"))
-    with tabs[1]: st.write(cv_dict.get("notes", "Няма данни"))
-    with tabs[2]: st.write(cv_dict.get("cv_text", "Няма данни"))
+    with tabs[0]: st.markdown(cv_dict.get("questionnaire", "Няма данни"))
+    with tabs[1]: st.markdown(cv_dict.get("notes", "Няма данни"))
+    with tabs[2]: st.markdown(cv_dict.get("cv_text", "Няма данни"))
     with tabs[3]: st.write("Историята на интервютата ще се появи тук.")
     with tabs[4]: st.write("Слайдерите за оценка ще се появят тук.")
 
@@ -178,7 +217,7 @@ def render_recruitment_module():
     status_filter = st.pills("Филтър по статус:", ["Всички", "Нов", "Телефонно интервю", "Живо интервю", "Одобрен", "Отхвърлен"], default="Всички")
     
     # Извличане на кандидатите за тази позиция
-    apps_res = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("position_id", target_pos_id).execute()
+    apps_res = supabase.table("hr_applications").select("*, hr_candidates(*)").order("created_at", desc=True).eq("position_id", target_pos_id).execute()
     apps = apps_res.data if apps_res.data else []
     
     if apps:
