@@ -10,7 +10,7 @@ import re
 # ЗАБЕЛЕЖКА: Gemini API Key трябва да бъде добавен в st.secrets за сигурност
 # import google.generativeai as genai
 
-def recruitment_module():
+def render_recruitment_module():
     st.header("📋 Модул Рекрутмънт и Подбор (ATS)")
 
     if not check_permission("recruitment_view"):
@@ -47,35 +47,30 @@ def recruitment_module():
             with zipfile.ZipFile(uploaded_file, "r") as z:
                 count = 0
                 for file_name in z.namelist():
-                    if file_name.endswith((".html", ".htm")):
+                    # 1. Парсване на HTML файлове
+                    if file_name.lower().endswith((".html", ".htm")):
                         with z.open(file_name) as f:
-                            html_content = f.read().decode("utf-8")
+                            html_content = f.read().decode("utf-8", errors="ignore")
                             soup = BeautifulSoup(html_content, "html.parser")
                             
-                            # По-добро структуриране на текста чрез запазване на нови редове от блокови елементи
                             for br in soup.find_all("br"):
                                 br.replace_with("\n")
                             for p in soup.find_all(["p", "div", "tr"]):
                                 p.append("\n")
                             
                             raw_text = soup.get_text(separator=' ')
-                            # Почистване на излишни празни пространства, но запазване на единични нови редове
                             clean_text = re.sub(r' +', ' ', raw_text)
                             clean_text = re.sub(r'\n\s*\n', '\n\n', clean_text).strip()
-                            
-                            # Опит за извличане на Име (базирано на заглавие в jobs.bg структура)
                             candidate_name = soup.title.string.replace("Jobs.bg - ", "") if soup.title else "Неизвестен"
                             
-                            # Запис в hr_candidates (Дедубликация по име/телефон се прави в базата чрез Unique Constraint)
                             try:
                                 candidate_data = {
                                     "full_name": candidate_name,
                                     "cv_text": clean_text,
-                                    "source": "Jobs.bg ZIP"
+                                    "source": "Jobs.bg HTML"
                                 }
                                 res = supabase.table("hr_candidates").upsert(candidate_data, on_conflict="full_name").execute()
                                 
-                                # Закачане към позицията (Application)
                                 if res.data:
                                     cand_id = res.data[0]["id"]
                                     pos_id_data = supabase.table("hr_positions").select("id").eq("title", target_pos).execute()
@@ -88,6 +83,43 @@ def recruitment_module():
                                 count += 1
                             except Exception as e:
                                 continue
+                    
+                    # 2. Парсване на PDF файлове
+                    elif file_name.lower().endswith(".pdf"):
+                        with z.open(file_name) as f:
+                            try:
+                                pdf_reader = PyPDF2.PdfReader(f)
+                                raw_text = ""
+                                for page in pdf_reader.pages:
+                                    extracted = page.extract_text()
+                                    if extracted:
+                                        raw_text += extracted + "\n"
+                                
+                                clean_text = re.sub(r' +', ' ', raw_text)
+                                clean_text = re.sub(r'\n\s*\n', '\n\n', clean_text).strip()
+                                # При PDF нямаме лесен <title>, затова ползваме името на файла
+                                candidate_name = file_name.split('/')[-1].replace(".pdf", "").replace(".PDF", "")
+                                
+                                candidate_data = {
+                                    "full_name": candidate_name,
+                                    "cv_text": clean_text,
+                                    "source": "Jobs.bg PDF"
+                                }
+                                res = supabase.table("hr_candidates").upsert(candidate_data, on_conflict="full_name").execute()
+                                
+                                if res.data:
+                                    cand_id = res.data[0]["id"]
+                                    pos_id_data = supabase.table("hr_positions").select("id").eq("title", target_pos).execute()
+                                    if pos_id_data.data:
+                                        supabase.table("hr_applications").insert({
+                                            "candidate_id": cand_id,
+                                            "position_id": pos_id_data.data[0]["id"],
+                                            "status": "Нов"
+                                        }).execute()
+                                count += 1
+                            except Exception as e:
+                                continue
+
                 st.success(f"Успешно обработени {count} кандидати!")
 
     # --- ТАБ: КАНБАН ---
@@ -96,13 +128,11 @@ def recruitment_module():
         if positions_df.data:
             selected_kanban_pos = st.selectbox("Филтър по позиция", [p["title"] for p in positions_df.data], key="kanban_filter")
             
-            # Взимане на апликациите
             apps_query = supabase.table("hr_applications").select("*, hr_candidates(full_name, cv_text), hr_positions(title, requirements)").limit(100000).execute()
             
             if apps_query.data:
                 apps_df = pd.DataFrame(apps_query.data)
-                # Филтриране по избрана позиция
-                apps_df = apps_df[apps_df['hr_positions'].apply(lambda x: x['title'] == selected_kanban_pos)]
+                apps_df = apps_df[apps_df['hr_positions'].apply(lambda x: x['title'] == selected_kanban_pos if isinstance(x, dict) else False)]
                 
                 cols = st.columns(4)
                 statuses = ["Нов", "Интервю", "Одобрен", "Отхвърлен"]
@@ -115,23 +145,17 @@ def recruitment_module():
                             with st.expander(f"👤 {app['hr_candidates']['full_name']}"):
                                 st.write(f"ID: {app['id']}")
                                 
-                                # Смяна на статус
                                 new_status = st.selectbox("Промени статус", statuses, index=statuses.index(status), key=f"status_{app['id']}")
                                 if new_status != status:
                                     supabase.table("hr_applications").update({"status": new_status}).eq("id", app["id"]).execute()
                                     st.rerun()
 
-                                # --- AI ОЦЕНКА И КАРТОН ---
+                                # --- AI ОЦЕНКА ---
                                 if st.button("✨ Генерирай AI Оценка", key=f"ai_{app['id']}"):
                                     st.info("Връзка с Gemini API... (Тук се изпраща CV + Изисквания)")
                                     
-                                    # ЛОГИКА ЗА GEMINI (Подготовка):
-                                    # prompt = f"Сравни CV: {app['hr_candidates']['cv_text']} с Изисквания: {app['hr_positions']['requirements']}. Дай оценка 1-10 и кратък коментар."
-                                    # response = model.generate_content(prompt)
-                                    # supabase.table("hr_applications").update({"ai_score": response.text}).eq("id", app["id"]).execute()
-                                    
                                     # За момента симулираме запис:
-                                    mock_ai = "Оценка: 8/10. Кандидатът има отличен опит с хидравлика, но липсва опит в онлайн ритейла."
+                                    mock_ai = "Оценка: 8/10. Кандидатът има отличен опит с машини, но липсва опит в онлайн ритейла."
                                     supabase.table("hr_applications").update({"ai_score": mock_ai}).eq("id", app["id"]).execute()
                                     st.success("Оценката е генерирана!")
                                     st.rerun()
@@ -140,7 +164,6 @@ def recruitment_module():
                                     st.info(f"AI Анализ: {app['ai_score']}")
 
                                 if st.checkbox("Виж извлечено CV", key=f"cv_{app['id']}"):
-                                    # Показване на CV със запазено форматиране
                                     st.text_area("Текст от CV (структуриран):", value=app['hr_candidates']['cv_text'], height=300)
 
     # --- ТАБ: БАЗА КАНДИДАТИ ---
@@ -154,14 +177,13 @@ def recruitment_module():
     # --- ОПАСНА ЗОНА (СУПЕР-АДМИН) ---
     with tabs[4]:
         st.subheader("Административни настройки")
-        if st.session_state.get("user_role") == "Супер-админ":
+        if check_permission("super_admin"):  # Ползваме твоята логика от utils
             st.warning("Внимание: Hard Delete зона")
             if st.button("Изчисти всички тестови кандидати"):
-                # Тук се добавя логика за изтриване
                 st.error("Функцията е деактивирана за сигурност. Свържете се с CTO.")
         else:
             st.info("Само за Супер-админ")
 
 # Стартиране на модула (ако се вика директно за тест)
 if __name__ == "__main__":
-    recruitment_module()
+    render_recruitment_module()
