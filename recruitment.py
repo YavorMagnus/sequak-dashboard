@@ -54,7 +54,7 @@ def render_recruitment_module():
             cols_to_show = [c for c in ["title", "requirements", "created_at"] if c in df_p.columns]
             st.table(df_p[cols_to_show])
         else:
-            st.info("Все още няма създадени отворени позиции.")
+            st.info("Все হাস্য няма създадени отворени позиции.")
 
     # --- ТАБ: ВНОС ---
     with tabs[3]:
@@ -75,26 +75,30 @@ def render_recruitment_module():
                     count = 0
                     errors_log = [] 
                     
-                    with st.spinner("Интелигентен парсинг (1 ZIP = 1 Кандидат)..."):
+                    with st.spinner("Интелигентен парсинг (Извличане на правилни имена)..."):
                         for uploaded_file in uploaded_files:
                             try:
                                 candidate_text_parts = []
-                                # Взимаме името на ZIP файла като резервно име (запазваме главните букви!)
-                                candidate_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
-                                has_beautiful_name = False
+                                
+                                # ИДЕЯТА ТИ ЗА ZIP ИМЕТО: Jobs.bg ги кръщава "Ivan_Ivanov_14.36.zip"
+                                raw_zip_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
+                                # Махаме цифрите и точките накрая (часа), заменяме долните черти с интервал
+                                clean_zip_name = re.sub(r'_[0-9\.\-]+$', '', raw_zip_name).replace('_', ' ').strip()
+                                
+                                candidate_name = clean_zip_name if clean_zip_name else "Неизвестен"
+                                has_beautiful_name = bool(clean_zip_name)
                                 
                                 with zipfile.ZipFile(uploaded_file, "r") as z:
                                     for file_name in z.namelist():
-                                        original_base_name = file_name.split('/')[-1]
-                                        base_name_lower = original_base_name.lower()
+                                        base_name_lower = file_name.split('/')[-1].lower()
                                         
-                                        # Режем само системни шорткъти, но пазим реални HTML файлове
+                                        # Режем системен боклук
                                         if base_name_lower in ["jobs.bg", "business.jobs.bg"] or base_name_lower.endswith(".url"):
                                             continue
 
                                         clean_text = ""
 
-                                        # 1. Парсване на HTML (Въпросници, съобщения, CV-та)
+                                        # 1. Парсване на HTML (Въпросници)
                                         if base_name_lower.endswith((".html", ".htm")):
                                             with z.open(file_name) as f:
                                                 html_content = f.read().decode("utf-8", errors="ignore")
@@ -103,14 +107,15 @@ def render_recruitment_module():
                                                 for br in soup.find_all("br"): br.replace_with("\n")
                                                 for p in soup.find_all(["p", "div", "tr"]): p.append("\n")
                                                 
-                                                # Опит за извличане на красиво име от заглавието
-                                                extracted_name = soup.title.string.replace("Jobs.bg - ", "").strip() if soup.title else ""
-                                                if extracted_name and extracted_name.lower() not in ["jobs.bg", "business.jobs.bg", "неизвестен"]:
-                                                    candidate_name = extracted_name
-                                                    has_beautiful_name = True
-                                                    
                                                 raw_text = soup.get_text(separator=' ')
                                                 clean_text = html.unescape(raw_text).replace('\xa0', ' ')
+                                                
+                                                # ИДЕЯТА ТИ ЗА ВЪПРОСНИКА: Търсим името в текста, ако ZIP името е лошо
+                                                if not has_beautiful_name:
+                                                    lines = [line.strip() for line in clean_text.split('\n') if line.strip()]
+                                                    if len(lines) >= 2 and "jobs.bg" in lines[0].lower():
+                                                        candidate_name = lines[1] # Вторият ред обикновено е името
+                                                        has_beautiful_name = True
                                                 
                                         # 2. Парсване на PDF
                                         elif base_name_lower.endswith(".pdf"):
@@ -121,8 +126,7 @@ def render_recruitment_module():
                                                     extracted = page.extract_text()
                                                     if extracted: raw_text += extracted + "\n"
                                                 clean_text = raw_text
-                                                if not has_beautiful_name:
-                                                    candidate_name = original_base_name.replace(".pdf", "").replace(".PDF", "")
+                                                # ВЕЧЕ НЕ ПРЕЗАПИСВАМЕ ИМЕТО ОТ ФАЙЛА!
                                                 
                                         # 3. Парсване на Word (.docx)
                                         elif base_name_lower.endswith(".docx"):
@@ -131,8 +135,7 @@ def render_recruitment_module():
                                                 doc = docx.Document(file_stream)
                                                 raw_text = "\n".join([para.text for para in doc.paragraphs])
                                                 clean_text = raw_text
-                                                if not has_beautiful_name:
-                                                    candidate_name = original_base_name.replace(".docx", "").replace(".DOCX", "")
+                                                # ВЕЧЕ НЕ ПРЕЗАПИСВАМЕ ИМЕТО ОТ ФАЙЛА!
                                                 
                                         # 4. Парсване на стари Word документи (.doc)
                                         elif base_name_lower.endswith(".doc"):
@@ -147,11 +150,9 @@ def render_recruitment_module():
                                                 else:
                                                     text = raw_bytes.decode("windows-1251", errors="ignore")
                                                     clean_text = re.sub(r'[^\w\s\.,!?-]', ' ', text)
-                                                    
-                                                if not has_beautiful_name:
-                                                    candidate_name = original_base_name.replace(".doc", "").replace(".DOC", "")
+                                                # ВЕЧЕ НЕ ПРЕЗАПИСВАМЕ ИМЕТО ОТ ФАЙЛА!
                                             
-                                        # Финално чистене на текста от файла и добавяне към общия масив
+                                        # Финално чистене и добавяне към досието
                                         if clean_text:
                                             clean_text = clean_text.replace('\x00', '').replace('\u0000', '')
                                             clean_text = re.sub(r' +', ' ', clean_text)
@@ -160,9 +161,9 @@ def render_recruitment_module():
                                             if len(clean_text) > 10: 
                                                 candidate_text_parts.append(clean_text)
 
-                                # СЛЕД КАТО СМЕ ПРОЧЕЛИ ВСИЧКИ ФАЙЛОВЕ В ZIP-А: Сглобяваме ги в един профил
+                                # Създаване на профил
                                 if candidate_text_parts:
-                                    final_cv_text = "\n\n--- ДОПЪЛНИТЕЛЕН ДОКУМЕНТ (Въпросник/Мотивация) ---\n\n".join(candidate_text_parts)
+                                    final_cv_text = "\n\n--- ДОПЪЛНИТЕЛЕН ДОКУМЕНТ ---\n\n".join(candidate_text_parts)
                                     
                                     candidate_data = {
                                         "full_name": candidate_name,
@@ -183,7 +184,7 @@ def render_recruitment_module():
                                             }).execute()
                                     count += 1
                                 else:
-                                    errors_log.append(f"⚠️ Архивът {uploaded_file.name} изглежда празен или не съдържа четими CV формати.")
+                                    errors_log.append(f"⚠️ Архивът {uploaded_file.name} не съдържа четими CV формати.")
 
                             except Exception as zip_err:
                                 errors_log.append(f"❌ Грешка при отваряне на архив {uploaded_file.name}: {zip_err}")
