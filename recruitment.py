@@ -42,7 +42,10 @@ def parse_jobs_zip(uploaded_file):
     if not clean_name: clean_name = raw_name 
     
     cv_data = {"questionnaire": "Няма прикачен въпросник.", "notes": "Няма намерени бележки.", "cv_text": "Няма намерен текст на CV."}
-    photo_base64, has_document_cv, has_legacy_doc, html_profile_text = None, False, False, ""
+    photo_base64 = None
+    has_document_cv = False
+    has_legacy_doc = False
+    html_profile_text = ""
     
     with zipfile.ZipFile(uploaded_file, "r") as z:
         for file_name in z.namelist():
@@ -60,7 +63,7 @@ def parse_jobs_zip(uploaded_file):
             is_img = lower_name.endswith((".jpg", ".jpeg", ".png")) or file_bytes.startswith(b"\xFF\xD8\xFF") or file_bytes.startswith(b"\x89PNG")
             
             if is_doc:
-                has_legacy_doc = True  # Отбелязваме, че сме видяли динозавър
+                has_legacy_doc = True
                 
             if is_img and not photo_base64:
                 photo_base64 = base64.b64encode(file_bytes).decode("utf-8")
@@ -104,12 +107,10 @@ def parse_jobs_zip(uploaded_file):
                         has_document_cv = True
                 except: pass
 
-    # РЕШАВАНЕ КАКВО ДА ПОКАЖЕМ В CV ТАБА
     if not has_document_cv:
         if html_profile_text: 
             cv_data["cv_text"] = html_profile_text
         elif has_legacy_doc:
-            # Твоята идея в действие!
             cv_data["cv_text"] = "🚨 **Внимание: Неподдържан формат (.doc)**\n\nТози кандидат е прикачил автобиография в стар формат на Word (1997-2003), който не се поддържа за автоматично четене.\n\n**Какво да направите:**\n1. Отворете изтегления ZIP архив на вашия компютър.\n2. Отворете файла на кандидата и изберете *Save As... (Запази като)* във формат **.docx** или **.pdf**.\n3. Заместете стария файл в архива и качете кандидата отново в системата."
         
     return clean_name.title(), cv_data, photo_base64
@@ -220,13 +221,29 @@ def render_recruitment_module():
         with st.expander(f"📥 Импорт към '{selected_pos_title}'"):
             files = st.file_uploader("ZIP архиви", type="zip", accept_multiple_files=True)
             if files and st.button("Старт"):
-                for f in files:
-                    name, data, photo = parse_jobs_zip(f)
-                    c = supabase.table("hr_candidates").insert({"full_name": name, "raw_cv_data": data, "photo_thumbnail": photo}).execute()
-                    if c.data: supabase.table("hr_applications").insert({"candidate_id": c.data[0]["id"], "position_id": target_pos_id}).execute()
-                st.rerun()
+                with st.spinner("Парсване..."):
+                    for f in files:
+                        name, data, photo = parse_jobs_zip(f)
+                        c = supabase.table("hr_candidates").insert({"full_name": name, "raw_cv_data": data, "photo_thumbnail": photo}).execute()
+                        if c.data: supabase.table("hr_applications").insert({"candidate_id": c.data[0]["id"], "position_id": target_pos_id}).execute()
+                    st.rerun()
 
     st.write("### 👥 Кандидати")
     status_filter = st.pills("Филтър:", ["Всички", "Нов", "Телефонно интервю", "Живо интервю", "Одобрен", "Отхвърлен"], default="Всички")
     
-    apps = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("position_id", target_pos_id).order("created_at", desc=True).execute().
+    apps = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("position_id", target_pos_id).order("created_at", desc=True).execute().data or []
+    if status_filter != "Всички": apps = [a for a in apps if a["status"] == status_filter]
+    
+    if apps:
+        cols = st.columns(4)
+        for i, app in enumerate(apps):
+            cand = app["hr_candidates"]
+            with cols[i % 4]:
+                st.markdown(f"**{cand['full_name']}**", help=f"Дата на качване: {app['created_at'][:10]}")
+                st.caption(app['status'])
+                if st.button("📄 Отвори", key=f"btn_{app['id']}", use_container_width=True):
+                    open_candidate_card(app["id"], cand["id"], cand["full_name"], app["status"], cand["raw_cv_data"], cand["photo_thumbnail"], app["manual_score"])
+    else: st.info("Няма кандидати.")
+
+if __name__ == "__main__":
+    render_recruitment_module()
