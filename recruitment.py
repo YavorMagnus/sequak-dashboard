@@ -75,7 +75,7 @@ def render_recruitment_module():
                     count = 0
                     errors_log = [] 
                     
-                    with st.spinner("Интелигентен парсинг и проверка на файловете..."):
+                    with st.spinner("Интелигентен парсинг и запис на файловете..."):
                         for uploaded_file in uploaded_files:
                             try:
                                 with zipfile.ZipFile(uploaded_file, "r") as z:
@@ -85,7 +85,8 @@ def render_recruitment_module():
                                         source_type = ""
                                         
                                         # ФИЛТЪР ЗА БОКЛУК: Прескачаме системни файлове от Jobs.bg
-                                        if file_name.lower().strip() in ["jobs.bg", "business.jobs.bg", "jobs.bg.html", "business.jobs.bg.html"]:
+                                        base_name = file_name.split('/')[-1].lower()
+                                        if base_name in ["jobs.bg", "business.jobs.bg", "jobs.bg.html", "business.jobs.bg.html", ""]:
                                             continue
 
                                         # 1. Парсване на HTML
@@ -102,9 +103,8 @@ def render_recruitment_module():
                                                 raw_text = soup.get_text(separator=' ')
                                                 clean_text = html.unescape(raw_text).replace('\xa0', ' ')
                                                 
-                                                # Вадим името и филтрираме системните заглавия
                                                 extracted_name = soup.title.string.replace("Jobs.bg - ", "").strip() if soup.title else "Неизвестен"
-                                                if extracted_name.lower() in ["jobs.bg", "business.jobs.bg"]:
+                                                if extracted_name.lower() in ["jobs.bg", "business.jobs.bg", "неизвестен"]:
                                                     continue
                                                     
                                                 candidate_name = extracted_name
@@ -120,7 +120,7 @@ def render_recruitment_module():
                                                     if extracted:
                                                         raw_text += extracted + "\n"
                                                 clean_text = raw_text
-                                                candidate_name = file_name.split('/')[-1].replace(".pdf", "").replace(".PDF", "")
+                                                candidate_name = base_name.replace(".pdf", "")
                                                 source_type = "Jobs.bg PDF"
                                                 
                                         # 3. Парсване на Word (.docx)
@@ -130,12 +130,12 @@ def render_recruitment_module():
                                                 doc = docx.Document(file_stream)
                                                 raw_text = "\n".join([para.text for para in doc.paragraphs])
                                                 clean_text = raw_text
-                                                candidate_name = file_name.split('/')[-1].replace(".docx", "").replace(".DOCX", "")
+                                                candidate_name = base_name.replace(".docx", "")
                                                 source_type = "Jobs.bg DOCX"
                                                 
                                         # 4. Блокиране на стар формат (.doc)
                                         elif file_name.lower().endswith(".doc"):
-                                            errors_log.append(f"⚠️ {file_name}: Форматът '.doc' е остарял. Моля, запазете като PDF или DOCX.")
+                                            errors_log.append(f"⚠️ {base_name}: Форматът '.doc' е остарял. Моля, запазете като PDF или DOCX.")
                                             continue
                                             
                                         # ЗАЩИТА ПРЕДИ БАЗАТА
@@ -150,7 +150,9 @@ def render_recruitment_module():
                                                         "cv_text": clean_text,
                                                         "source": source_type
                                                     }
-                                                    res = supabase.table("hr_candidates").upsert(candidate_data, on_conflict="full_name").execute()
+                                                    
+                                                    # НОВО: Директен INSERT вместо UPSERT. Базата вече няма да се сърди за липса на уникалност.
+                                                    res = supabase.table("hr_candidates").insert(candidate_data).execute()
                                                     
                                                     if res.data:
                                                         cand_id = res.data[0]["id"]
@@ -165,14 +167,14 @@ def render_recruitment_module():
                                                 except Exception as db_err:
                                                     errors_log.append(f"❌ Грешка в базата за {candidate_name}: {db_err}")
                                             else:
-                                                errors_log.append(f"⚠️ {file_name}: Файлът изглежда празен или текстът не може да бъде разчетен.")
+                                                errors_log.append(f"⚠️ {base_name}: Файлът изглежда празен или текстът не може да бъде разчетен.")
 
                             except Exception as zip_err:
                                 errors_log.append(f"❌ Грешка при отваряне на архив {uploaded_file.name}: {zip_err}")
 
                     # Финален репорт
                     if count > 0:
-                        st.success(f"🎉 Успешно проверени и обработени {count} кандидати!")
+                        st.success(f"🎉 Успешно импортирани {count} кандидати!")
                     else:
                         st.warning("⚠️ Не бяха импортирани кандидати. Проверете детайлите по-долу.")
                         
