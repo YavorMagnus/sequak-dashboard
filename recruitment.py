@@ -84,7 +84,7 @@ def render_recruitment_module():
                                         candidate_name = "Неизвестен"
                                         source_type = ""
                                         
-                                        # ФИЛТЪР ЗА БОКЛУК: Прескачаме системни файлове от Jobs.bg
+                                        # ФИЛТЪР ЗА БОКЛУК
                                         base_name = file_name.split('/')[-1].lower()
                                         if base_name in ["jobs.bg", "business.jobs.bg", "jobs.bg.html", "business.jobs.bg.html", ""]:
                                             continue
@@ -94,19 +94,14 @@ def render_recruitment_module():
                                             with z.open(file_name) as f:
                                                 html_content = f.read().decode("utf-8", errors="ignore")
                                                 soup = BeautifulSoup(html_content, "html.parser")
-                                                
-                                                for br in soup.find_all("br"):
-                                                    br.replace_with("\n")
-                                                for p in soup.find_all(["p", "div", "tr"]):
-                                                    p.append("\n")
+                                                for br in soup.find_all("br"): br.replace_with("\n")
+                                                for p in soup.find_all(["p", "div", "tr"]): p.append("\n")
                                                 
                                                 raw_text = soup.get_text(separator=' ')
                                                 clean_text = html.unescape(raw_text).replace('\xa0', ' ')
                                                 
                                                 extracted_name = soup.title.string.replace("Jobs.bg - ", "").strip() if soup.title else "Неизвестен"
-                                                if extracted_name.lower() in ["jobs.bg", "business.jobs.bg", "неизвестен"]:
-                                                    continue
-                                                    
+                                                if extracted_name.lower() in ["jobs.bg", "business.jobs.bg", "неизвестен"]: continue
                                                 candidate_name = extracted_name
                                                 source_type = "Jobs.bg HTML"
                                                 
@@ -117,8 +112,7 @@ def render_recruitment_module():
                                                 raw_text = ""
                                                 for page in pdf_reader.pages:
                                                     extracted = page.extract_text()
-                                                    if extracted:
-                                                        raw_text += extracted + "\n"
+                                                    if extracted: raw_text += extracted + "\n"
                                                 clean_text = raw_text
                                                 candidate_name = base_name.replace(".pdf", "")
                                                 source_type = "Jobs.bg PDF"
@@ -133,13 +127,31 @@ def render_recruitment_module():
                                                 candidate_name = base_name.replace(".docx", "")
                                                 source_type = "Jobs.bg DOCX"
                                                 
-                                        # 4. Блокиране на стар формат (.doc)
+                                        # 4. Парсване на стари Word документи (.doc) - Fallback
                                         elif file_name.lower().endswith(".doc"):
-                                            errors_log.append(f"⚠️ {base_name}: Форматът '.doc' е остарял. Моля, запазете като PDF или DOCX.")
-                                            continue
+                                            with z.open(file_name) as f:
+                                                raw_bytes = f.read()
+                                                decoded_text = raw_bytes.decode("utf-8", errors="ignore")
+                                                
+                                                # Проверка за маскиран HTML
+                                                if "<html" in decoded_text.lower() or "jobs.bg" in decoded_text.lower():
+                                                    soup = BeautifulSoup(decoded_text, "html.parser")
+                                                    for br in soup.find_all("br"): br.replace_with("\n")
+                                                    clean_text = html.unescape(soup.get_text(separator=' ')).replace('\xa0', ' ')
+                                                    source_type = "Jobs.bg DOC (HTML Format)"
+                                                else:
+                                                    # Мръсно изстъргване на бинарен файл (взимаме четимия текст)
+                                                    text = raw_bytes.decode("windows-1251", errors="ignore")
+                                                    clean_text = re.sub(r'[^\w\s\.,!?-]', ' ', text) # Махаме бинарния боклук
+                                                    source_type = "Jobs.bg DOC (Raw Extraction)"
+                                                
+                                                candidate_name = base_name.replace(".doc", "")
                                             
-                                        # ЗАЩИТА ПРЕДИ БАЗАТА
+                                        # ЗАЩИТА ПРЕДИ БАЗАТА И УБИЙСТВО НА NULL BYTES (\x00)
                                         if clean_text:
+                                            # ТОЗИ РЕД СПАСЯВА СИСТЕМАТА ОТ ГРЕШКА 22P05
+                                            clean_text = clean_text.replace('\x00', '').replace('\u0000', '')
+                                            
                                             clean_text = re.sub(r' +', ' ', clean_text)
                                             clean_text = re.sub(r'\n\s*\n', '\n\n', clean_text).strip()
                                             
@@ -150,8 +162,6 @@ def render_recruitment_module():
                                                         "cv_text": clean_text,
                                                         "source": source_type
                                                     }
-                                                    
-                                                    # НОВО: Директен INSERT вместо UPSERT. Базата вече няма да се сърди за липса на уникалност.
                                                     res = supabase.table("hr_candidates").insert(candidate_data).execute()
                                                     
                                                     if res.data:
