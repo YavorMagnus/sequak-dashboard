@@ -13,10 +13,10 @@ import re
 def render_recruitment_module():
     st.header("📋 Модул Рекрутмънт и Подбор (ATS)")
 
-    # ВРЕМЕННО ИЗОЛИРАНА ПРОВЕРКА ЗА ПРАВА, докато синхронизираме utils.py
-    # if not check_permission("recruitment_view"):
-    #     st.error("Нямате достъп до този модул.")
-    #     return
+    # ПРАВИЛНАТА ПРОВЕРКА: извикваме функцията с двата нужни аргумента
+    if not check_permission("recruitment", "read"):
+        st.error("Нямате достъп до този модул.")
+        return
 
     tabs = st.tabs(["📊 Канбан", "👥 База Кандидати", "💼 Позиции", "📥 Внос (Jobs.bg)", "⚙️ Настройки"])
 
@@ -31,15 +31,20 @@ def render_recruitment_module():
     # --- ТАБ: ПОЗИЦИИ ---
     with tabs[2]:
         st.subheader("Управление на отворени позиции")
-        with st.form("add_position"):
-            pos_name = st.text_input("Име на позицията (напр. Механик, Търговски представител)")
-            pos_req = st.text_area("Изисквания (Матрица за AI оценка)")
-            submit_pos = st.form_submit_button("Създай позиция")
+        
+        # Визуализираме формата за създаване САМО ако потребителят има право "manage_positions"
+        if check_permission("recruitment", "manage_positions"):
+            with st.form("add_position"):
+                pos_name = st.text_input("Име на позицията (напр. Механик, Търговски представител)")
+                pos_req = st.text_area("Изисквания (Матрица за AI оценка)")
+                submit_pos = st.form_submit_button("Създай позиция")
 
-            if submit_pos and pos_name:
-                supabase.table("hr_positions").insert({"title": pos_name, "requirements": pos_req}).execute()
-                st.success("Позицията е създадена!")
-                st.rerun()
+                if submit_pos and pos_name:
+                    supabase.table("hr_positions").insert({"title": pos_name, "requirements": pos_req}).execute()
+                    st.success("Позицията е създадена!")
+                    st.rerun()
+        else:
+            st.info("Нямате права за създаване на нови позиции. Режим на четене.")
 
         if has_positions:
             df_p = pd.DataFrame(positions_df.data)
@@ -47,98 +52,102 @@ def render_recruitment_module():
             cols_to_show = [c for c in ["title", "requirements", "created_at"] if c in df_p.columns]
             st.table(df_p[cols_to_show])
         else:
-            st.info("Все още няма създадени отворени позиции. Създайте първата си позиция по-горе.")
+            st.info("Все още няма създадени отворени позиции.")
 
     # --- ТАБ: ВНОС ---
     with tabs[3]:
         st.subheader("Масово качване на кандидати от Jobs.bg (ZIP)")
-        target_pos = st.selectbox(
-            "Избери позиция за вноса", 
-            [p["title"] for p in positions_df.data] if has_positions else ["Няма активни позиции"]
-        )
         
-        uploaded_file = st.file_uploader("Качи ZIP архив", type="zip")
+        if check_permission("recruitment", "upload_candidates"):
+            target_pos = st.selectbox(
+                "Избери позиция за вноса", 
+                [p["title"] for p in positions_df.data] if has_positions else ["Няма активни позиции"]
+            )
+            
+            uploaded_file = st.file_uploader("Качи ZIP архив", type="zip")
 
-        if uploaded_file and st.button("Стартирай импорт"):
-            if not has_positions:
-                st.warning("Моля, първо създайте позиция в таб 'Позиции', към която да прикачите кандидатите.")
-            else:
-                with zipfile.ZipFile(uploaded_file, "r") as z:
-                    count = 0
-                    for file_name in z.namelist():
-                        # 1. Парсване на HTML файлове
-                        if file_name.lower().endswith((".html", ".htm")):
-                            with z.open(file_name) as f:
-                                html_content = f.read().decode("utf-8", errors="ignore")
-                                soup = BeautifulSoup(html_content, "html.parser")
-                                
-                                for br in soup.find_all("br"):
-                                    br.replace_with("\n")
-                                for p in soup.find_all(["p", "div", "tr"]):
-                                    p.append("\n")
-                                
-                                raw_text = soup.get_text(separator=' ')
-                                clean_text = re.sub(r' +', ' ', raw_text)
-                                clean_text = re.sub(r'\n\s*\n', '\n\n', clean_text).strip()
-                                candidate_name = soup.title.string.replace("Jobs.bg - ", "") if soup.title else "Неизвестен"
-                                
-                                try:
-                                    candidate_data = {
-                                        "full_name": candidate_name,
-                                        "cv_text": clean_text,
-                                        "source": "Jobs.bg HTML"
-                                    }
-                                    res = supabase.table("hr_candidates").upsert(candidate_data, on_conflict="full_name").execute()
+            if uploaded_file and st.button("Стартирай импорт"):
+                if not has_positions:
+                    st.warning("Моля, първо създайте позиция в таб 'Позиции', към която да прикачите кандидатите.")
+                else:
+                    with zipfile.ZipFile(uploaded_file, "r") as z:
+                        count = 0
+                        for file_name in z.namelist():
+                            # 1. Парсване на HTML файлове
+                            if file_name.lower().endswith((".html", ".htm")):
+                                with z.open(file_name) as f:
+                                    html_content = f.read().decode("utf-8", errors="ignore")
+                                    soup = BeautifulSoup(html_content, "html.parser")
                                     
-                                    if res.data:
-                                        cand_id = res.data[0]["id"]
-                                        pos_id_data = supabase.table("hr_positions").select("id").eq("title", target_pos).execute()
-                                        if pos_id_data.data:
-                                            supabase.table("hr_applications").insert({
-                                                "candidate_id": cand_id,
-                                                "position_id": pos_id_data.data[0]["id"],
-                                                "status": "Нов"
-                                            }).execute()
-                                    count += 1
-                                except Exception as e:
-                                    continue
-                        
-                        # 2. Парсване на PDF файлове
-                        elif file_name.lower().endswith(".pdf"):
-                            with z.open(file_name) as f:
-                                try:
-                                    pdf_reader = PyPDF2.PdfReader(f)
-                                    raw_text = ""
-                                    for page in pdf_reader.pages:
-                                        extracted = page.extract_text()
-                                        if extracted:
-                                            raw_text += extracted + "\n"
+                                    for br in soup.find_all("br"):
+                                        br.replace_with("\n")
+                                    for p in soup.find_all(["p", "div", "tr"]):
+                                        p.append("\n")
                                     
+                                    raw_text = soup.get_text(separator=' ')
                                     clean_text = re.sub(r' +', ' ', raw_text)
                                     clean_text = re.sub(r'\n\s*\n', '\n\n', clean_text).strip()
-                                    candidate_name = file_name.split('/')[-1].replace(".pdf", "").replace(".PDF", "")
+                                    candidate_name = soup.title.string.replace("Jobs.bg - ", "") if soup.title else "Неизвестен"
                                     
-                                    candidate_data = {
-                                        "full_name": candidate_name,
-                                        "cv_text": clean_text,
-                                        "source": "Jobs.bg PDF"
-                                    }
-                                    res = supabase.table("hr_candidates").upsert(candidate_data, on_conflict="full_name").execute()
-                                    
-                                    if res.data:
-                                        cand_id = res.data[0]["id"]
-                                        pos_id_data = supabase.table("hr_positions").select("id").eq("title", target_pos).execute()
-                                        if pos_id_data.data:
-                                            supabase.table("hr_applications").insert({
-                                                "candidate_id": cand_id,
-                                                "position_id": pos_id_data.data[0]["id"],
-                                                "status": "Нов"
-                                            }).execute()
-                                    count += 1
-                                except Exception as e:
-                                    continue
+                                    try:
+                                        candidate_data = {
+                                            "full_name": candidate_name,
+                                            "cv_text": clean_text,
+                                            "source": "Jobs.bg HTML"
+                                        }
+                                        res = supabase.table("hr_candidates").upsert(candidate_data, on_conflict="full_name").execute()
+                                        
+                                        if res.data:
+                                            cand_id = res.data[0]["id"]
+                                            pos_id_data = supabase.table("hr_positions").select("id").eq("title", target_pos).execute()
+                                            if pos_id_data.data:
+                                                supabase.table("hr_applications").insert({
+                                                    "candidate_id": cand_id,
+                                                    "position_id": pos_id_data.data[0]["id"],
+                                                    "status": "Нов"
+                                                }).execute()
+                                        count += 1
+                                    except Exception as e:
+                                        continue
+                            
+                            # 2. Парсване на PDF файлове
+                            elif file_name.lower().endswith(".pdf"):
+                                with z.open(file_name) as f:
+                                    try:
+                                        pdf_reader = PyPDF2.PdfReader(f)
+                                        raw_text = ""
+                                        for page in pdf_reader.pages:
+                                            extracted = page.extract_text()
+                                            if extracted:
+                                                raw_text += extracted + "\n"
+                                        
+                                        clean_text = re.sub(r' +', ' ', raw_text)
+                                        clean_text = re.sub(r'\n\s*\n', '\n\n', clean_text).strip()
+                                        candidate_name = file_name.split('/')[-1].replace(".pdf", "").replace(".PDF", "")
+                                        
+                                        candidate_data = {
+                                            "full_name": candidate_name,
+                                            "cv_text": clean_text,
+                                            "source": "Jobs.bg PDF"
+                                        }
+                                        res = supabase.table("hr_candidates").upsert(candidate_data, on_conflict="full_name").execute()
+                                        
+                                        if res.data:
+                                            cand_id = res.data[0]["id"]
+                                            pos_id_data = supabase.table("hr_positions").select("id").eq("title", target_pos).execute()
+                                            if pos_id_data.data:
+                                                supabase.table("hr_applications").insert({
+                                                    "candidate_id": cand_id,
+                                                    "position_id": pos_id_data.data[0]["id"],
+                                                    "status": "Нов"
+                                                }).execute()
+                                        count += 1
+                                    except Exception as e:
+                                        continue
 
-                    st.success(f"Успешно обработени {count} кандидати!")
+                        st.success(f"Успешно обработени {count} кандидати!")
+        else:
+            st.info("Нямате права за внос на кандидати.")
 
     # --- ТАБ: КАНБАН ---
     with tabs[0]:
@@ -152,11 +161,9 @@ def render_recruitment_module():
                 if apps_query.data:
                     apps_df = pd.DataFrame(apps_query.data)
                     
-                    # Защита: Проверка дали Foreign Keys са върнали очакваните обекти
                     if 'hr_positions' not in apps_df.columns or 'hr_candidates' not in apps_df.columns:
                         st.error("⚠️ Базата данни е празна или липсват Foreign Keys (релации) между таблиците hr_applications, hr_positions и hr_candidates в Supabase.")
                     else:
-                        # Защитно филтриране по позиция
                         apps_df = apps_df[apps_df['hr_positions'].apply(lambda x: x.get('title') == selected_kanban_pos if isinstance(x, dict) else False)]
                         
                         cols = st.columns(4)
@@ -168,25 +175,27 @@ def render_recruitment_module():
                                 status_apps = apps_df[apps_df["status"] == status]
                                 for _, app in status_apps.iterrows():
                                     
-                                    # Защита: Ако липсва кандидат за тази апликация (orphan record)
                                     cand_name = app.get('hr_candidates', {}).get('full_name', 'Неизвестен') if isinstance(app.get('hr_candidates'), dict) else 'Неизвестен'
                                     cv_text = app.get('hr_candidates', {}).get('cv_text', 'Няма данни') if isinstance(app.get('hr_candidates'), dict) else 'Няма данни'
                                     
                                     with st.expander(f"👤 {cand_name}"):
                                         st.write(f"ID: {app['id']}")
                                         
-                                        new_status = st.selectbox("Промени статус", statuses, index=statuses.index(status), key=f"status_{app['id']}")
-                                        if new_status != status:
-                                            supabase.table("hr_applications").update({"status": new_status}).eq("id", app["id"]).execute()
-                                            st.rerun()
-
+                                        # Редакция на статус (изисква evaluate права, защото е местене по канбан)
+                                        if check_permission("recruitment", "evaluate"):
+                                            new_status = st.selectbox("Промени статус", statuses, index=statuses.index(status), key=f"status_{app['id']}")
+                                            if new_status != status:
+                                                supabase.table("hr_applications").update({"status": new_status}).eq("id", app["id"]).execute()
+                                                st.rerun()
+                                        
                                         # --- AI ОЦЕНКА ---
-                                        if st.button("✨ Генерирай AI Оценка", key=f"ai_{app['id']}"):
-                                            st.info("Връзка с Gemini API... (Тук се изпраща CV + Изисквания)")
-                                            mock_ai = "Оценка: 8/10. Кандидатът има отличен опит с машини, но липсва опит в онлайн ритейла."
-                                            supabase.table("hr_applications").update({"ai_score": mock_ai}).eq("id", app["id"]).execute()
-                                            st.success("Оценката е генерирана!")
-                                            st.rerun()
+                                        if check_permission("recruitment", "evaluate"):
+                                            if st.button("✨ Генерирай AI Оценка", key=f"ai_{app['id']}"):
+                                                st.info("Връзка с Gemini API... (Тук се изпраща CV + Изисквания)")
+                                                mock_ai = "Оценка: 8/10. Кандидатът има отличен опит с машини, но липсва опит в онлайн ритейла."
+                                                supabase.table("hr_applications").update({"ai_score": mock_ai}).eq("id", app["id"]).execute()
+                                                st.success("Оценката е генерирана!")
+                                                st.rerun()
 
                                         if app.get("ai_score"):
                                             st.info(f"AI Анализ: {app['ai_score']}")
@@ -207,7 +216,6 @@ def render_recruitment_module():
             candidates_data = supabase.table("hr_candidates").select("*").limit(100000).execute()
             if candidates_data.data:
                 df_c = pd.DataFrame(candidates_data.data)
-                # Защита: Показваме само колоните, които реално съществуват
                 cols_to_show_c = [c for c in ["full_name", "source", "created_at"] if c in df_c.columns]
                 st.dataframe(df_c[cols_to_show_c])
             else:
