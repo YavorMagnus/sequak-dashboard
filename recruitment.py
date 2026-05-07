@@ -34,7 +34,7 @@ def clean_html_text(html_bytes):
     text = text.replace('\n', '  \n')
     return text.strip()
 
-# --- ХАКЕРСКИ ПАРСЪР (MAGIC NUMBERS & WORD) ---
+# --- ХАКЕРСКИ ПАРСЪР (БЕЗ ЗОМБИ .DOC ФАЙЛОВЕ) ---
 def parse_jobs_zip(uploaded_file):
     raw_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
     name_no_dates = re.sub(r'_[0-9]{2}\.[0-9]{2}\.[0-9]{4}.*', '', raw_name)
@@ -51,10 +51,9 @@ def parse_jobs_zip(uploaded_file):
             with z.open(file_name) as f:
                 file_bytes = f.read()
                 
-            # ИДЕНТИФИКАЦИЯ ЧРЕЗ МАГИЧЕСКИ БАЙТОВЕ (Заобикаляме липсващи разширения)
             is_pdf = file_bytes.startswith(b"%PDF") or lower_name.endswith(".pdf")
             is_docx = lower_name.endswith(".docx")
-            is_doc = lower_name.endswith(".doc")
+            # Нарочно игнорираме .doc, за да се задейства спасителният HTML профил!
             is_html = lower_name.endswith((".html", ".htm")) or b"<html" in file_bytes[:500].lower()
             is_img = lower_name.endswith((".jpg", ".jpeg", ".png")) or file_bytes.startswith(b"\xFF\xD8\xFF") or file_bytes.startswith(b"\x89PNG")
             
@@ -93,17 +92,8 @@ def parse_jobs_zip(uploaded_file):
                     cv_data["cv_text"] = "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()])
                     has_document_cv = True
                 except: pass
-                
-            elif is_doc:
-                # Спасителен пояс за антични .doc файлове (Cyrillic Windows-1251)
-                try:
-                    dec = file_bytes.decode("windows-1251", errors="ignore")
-                    clean_doc = re.sub(r'[^\w\s\.,!?-]', ' ', dec)
-                    cv_data["cv_text"] = re.sub(r'\s+', ' ', clean_doc).strip()
-                    has_document_cv = True
-                except: pass
 
-    # Ако няма намерен PDF/Word, ползваме HTML профила като CV
+    # Магията: Ако е имало стар .doc, has_document_cv ще е False и ще изгрее красивият HTML!
     if not has_document_cv and html_profile_text: 
         cv_data["cv_text"] = html_profile_text
         
@@ -176,7 +166,7 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
             
         st.divider()
         
-        # Логика за сумиране и блокиране
+        # Логика за сумиране и блокиране (Твоята идея)
         if total_score != 100:
             st.error(f"🚨 **Внимание:** Текущата сума е **{total_score}%**. Моля, разпределете точно 100%, за да запазите.")
             btn_disabled = True
