@@ -34,13 +34,15 @@ def clean_html_text(html_bytes):
     text = text.replace('\n', '  \n')
     return text.strip()
 
-# --- ХАКЕРСКИ ПАРСЪР (БЕЗ ЗОМБИ .DOC ФАЙЛОВЕ) ---
+# --- ХАКЕРСКИ ПАРСЪР (V10 - С КЛОПКА ЗА СТАРИ .DOC ФАЙЛОВИ) ---
 def parse_jobs_zip(uploaded_file):
     raw_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
     name_no_dates = re.sub(r'_[0-9]{2}\.[0-9]{2}\.[0-9]{4}.*', '', raw_name)
     clean_name = re.sub(r'^[0-9]+_', '', name_no_dates).replace('_', ' ').strip()
+    if not clean_name: clean_name = raw_name 
+    
     cv_data = {"questionnaire": "Няма прикачен въпросник.", "notes": "Няма намерени бележки.", "cv_text": "Няма намерен текст на CV."}
-    photo_base64, has_document_cv, html_profile_text = None, False, ""
+    photo_base64, has_document_cv, has_legacy_doc, html_profile_text = None, False, False, ""
     
     with zipfile.ZipFile(uploaded_file, "r") as z:
         for file_name in z.namelist():
@@ -53,25 +55,29 @@ def parse_jobs_zip(uploaded_file):
                 
             is_pdf = file_bytes.startswith(b"%PDF") or lower_name.endswith(".pdf")
             is_docx = lower_name.endswith(".docx")
-            # Нарочно игнорираме .doc, за да се задейства спасителният HTML профил!
+            is_doc = lower_name.endswith(".doc")
             is_html = lower_name.endswith((".html", ".htm")) or b"<html" in file_bytes[:500].lower()
             is_img = lower_name.endswith((".jpg", ".jpeg", ".png")) or file_bytes.startswith(b"\xFF\xD8\xFF") or file_bytes.startswith(b"\x89PNG")
             
+            if is_doc:
+                has_legacy_doc = True  # Отбелязваме, че сме видяли динозавър
+                
             if is_img and not photo_base64:
                 photo_base64 = base64.b64encode(file_bytes).decode("utf-8")
                 
             elif is_html:
-                text_content = clean_html_text(file_bytes)
-                if "въпросник" in lower_name or "questionnaire" in lower_name:
+                html_str = file_bytes.decode("utf-8", errors="ignore")
+                if "cv-preview" in html_str:
+                    html_profile_text = clean_html_text(file_bytes)
+                elif "Въпросник" in html_str or "Questionnaire" in html_str or "questionnaire" in lower_name:
+                    text_content = clean_html_text(file_bytes)
                     idx = text_content.find("Въпросник") if text_content.find("Въпросник") != -1 else text_content.find("Questionnaire")
                     if idx != -1: text_content = text_content[idx:]
                     text_content = re.sub(r'\s*(\d+\.\s)', r'\n\n\1', text_content)
                     text_content = re.sub(r'(\?[*]?)\s+(.*)', r'\1 **\2**', text_content)
-                    cv_data["questionnaire"] = text_content
-                elif "notes" in lower_name or "бележки" in lower_name: 
-                    cv_data["notes"] = text_content
-                elif "профил" in lower_name or "profile" in lower_name: 
-                    html_profile_text = text_content
+                    cv_data["questionnaire"] = text_content.replace('\n', '  \n')
+                elif "Бележки" in html_str or "Notes" in html_str or "notes" in lower_name: 
+                    cv_data["notes"] = clean_html_text(file_bytes)
                     
             elif is_pdf:
                 try:
@@ -82,20 +88,29 @@ def parse_jobs_zip(uploaded_file):
                         if not photo_base64:
                             imgs = page.get_images(full=True)
                             if imgs: photo_base64 = base64.b64encode(doc.extract_image(imgs[0][0])["image"]).decode("utf-8")
-                    cv_data["cv_text"] = pdf_text.strip()
-                    has_document_cv = True
+                    
+                    cleaned_pdf_text = pdf_text.strip()
+                    if len(cleaned_pdf_text) > 50:
+                        cv_data["cv_text"] = cleaned_pdf_text
+                        has_document_cv = True
                 except: pass
                 
             elif is_docx:
                 try:
                     doc = docx.Document(io.BytesIO(file_bytes))
-                    cv_data["cv_text"] = "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-                    has_document_cv = True
+                    docx_text = "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()]).strip()
+                    if len(docx_text) > 50:
+                        cv_data["cv_text"] = docx_text
+                        has_document_cv = True
                 except: pass
 
-    # Магията: Ако е имало стар .doc, has_document_cv ще е False и ще изгрее красивият HTML!
-    if not has_document_cv and html_profile_text: 
-        cv_data["cv_text"] = html_profile_text
+    # РЕШАВАНЕ КАКВО ДА ПОКАЖЕМ В CV ТАБА
+    if not has_document_cv:
+        if html_profile_text: 
+            cv_data["cv_text"] = html_profile_text
+        elif has_legacy_doc:
+            # Твоята идея в действие!
+            cv_data["cv_text"] = "🚨 **Внимание: Неподдържан формат (.doc)**\n\nТози кандидат е прикачил автобиография в стар формат на Word (1997-2003), който не се поддържа за автоматично четене.\n\n**Какво да направите:**\n1. Отворете изтегления ZIP архив на вашия компютър.\n2. Отворете файла на кандидата и изберете *Save As... (Запази като)* във формат **.docx** или **.pdf**.\n3. Заместете стария файл в архива и качете кандидата отново в системата."
         
     return clean_name.title(), cv_data, photo_base64
 
@@ -104,7 +119,7 @@ def parse_jobs_zip(uploaded_file):
 def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_data, photo_base64, manual_score):
     col_img, col_info = st.columns([1, 4])
     with col_img:
-        if photo_base64: st.markdown(f'<img src="data:image/png;base64,{photo_base64}" style="width:100%; border-radius:10px;">', unsafe_allow_html=True)
+        if photo_base64: st.markdown(f'<img src="data:image/png;base64,{photo_base64}" style="width:100%; border-radius:10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">', unsafe_allow_html=True)
         else: st.info("Няма снимка")
     with col_info:
         st.subheader(f"👤 {candidate_name}")
@@ -112,7 +127,6 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
     
     st.divider()
     
-    # --- ЕКШЪН ПАНЕЛ ---
     col1, col2, col3, col4 = st.columns(4)
     statuses = ["Нов", "Телефонно интервю", "Живо интервю", "Одобрен", "Отхвърлен", "Преместен"]
     with col1: new_status = st.selectbox("Статус", statuses, index=statuses.index(status) if status in statuses else 0, label_visibility="collapsed")
@@ -165,8 +179,6 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
             total_score += val
             
         st.divider()
-        
-        # Логика за сумиране и блокиране (Твоята идея)
         if total_score != 100:
             st.error(f"🚨 **Внимание:** Текущата сума е **{total_score}%**. Моля, разпределете точно 100%, за да запазите.")
             btn_disabled = True
@@ -217,19 +229,4 @@ def render_recruitment_module():
     st.write("### 👥 Кандидати")
     status_filter = st.pills("Филтър:", ["Всички", "Нов", "Телефонно интервю", "Живо интервю", "Одобрен", "Отхвърлен"], default="Всички")
     
-    apps = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("position_id", target_pos_id).order("created_at", desc=True).execute().data or []
-    if status_filter != "Всички": apps = [a for a in apps if a["status"] == status_filter]
-    
-    if apps:
-        cols = st.columns(4)
-        for i, app in enumerate(apps):
-            cand = app["hr_candidates"]
-            with cols[i % 4]:
-                st.markdown(f"**{cand['full_name']}**", help=f"Дата на качване: {app['created_at'][:10]}")
-                st.caption(app['status'])
-                if st.button("📄 Отвори", key=f"btn_{app['id']}", use_container_width=True):
-                    open_candidate_card(app["id"], cand["id"], cand["full_name"], app["status"], cand["raw_cv_data"], cand["photo_thumbnail"], app["manual_score"])
-    else: st.info("Няма кандидати.")
-
-if __name__ == "__main__":
-    render_recruitment_module()
+    apps = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("position_id", target_pos_id).order("created_at", desc=True).execute().
