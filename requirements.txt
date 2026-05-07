@@ -7,3 +7,4 @@ python-dateutil
 plotly
 PyPDF2
 beautifulsoup4
+python-docx
