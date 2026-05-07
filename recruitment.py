@@ -20,11 +20,9 @@ COMPANIES = [
 def clean_html_text(html_bytes):
     soup = BeautifulSoup(html_bytes.decode("utf-8", errors="ignore"), "html.parser")
     
-    # 1. Премахване на скриптове и излишни тагове
     for tag in soup(["script", "style", "head", "noscript", "title"]):
         tag.extract()
         
-    # 2. Поставяне на Markdown маркери
     for label in soup.find_all("label"):
         label.insert_before("**")
         label.insert_after("**")
@@ -56,21 +54,18 @@ def clean_html_text(html_bytes):
     for block in soup.find_all(["div", "p", "tr", "li", "h1", "h2", "h3", "h4"]):
         block.insert_after("\n")
         
-    # 3. Извличане на текста (БЕЗ strip=True, за да запазим новите редове!)
     text = soup.get_text(separator=' ')
     
-    # 4. Почистване на параграфите (Regex магия за красив текст)
-    text = re.sub(r'[ \t]+', ' ', text)         # Свиваме множествени интервали
-    text = re.sub(r'\*\* +', '**', text)        # Махаме интервал след отварящ болд
-    text = re.sub(r' +\*\*', '**', text)        # Махаме интервал преди затварящ болд
-    text = re.sub(r'\* +', '*', text)           # Същото за курсив
-    text = re.sub(r' +\*', '*', text)           # Същото за курсив
-    text = text.replace('** :', '**: ')         # Поправяме двуточията
-    text = re.sub(r' \n', '\n', text)           # Махаме интервали преди нов ред
-    text = re.sub(r'\n ', '\n', text)           # Махаме интервали след нов ред
-    text = re.sub(r'\n{3,}', '\n\n', text)      # Максимум два празни реда един след друг
+    text = re.sub(r'[ \t]+', ' ', text)         
+    text = re.sub(r'\*\* +', '**', text)        
+    text = re.sub(r' +\*\*', '**', text)        
+    text = re.sub(r'\* +', '*', text)           
+    text = re.sub(r' +\*', '*', text)           
+    text = text.replace('** :', '**: ')         
+    text = re.sub(r' \n', '\n', text)           
+    text = re.sub(r'\n ', '\n', text)           
+    text = re.sub(r'\n{3,}', '\n\n', text)      
     
-    # За да може Streamlit да ги рендерира като истински нови редове
     text = text.replace('\n', '  \n')
     
     return text.strip()
@@ -145,15 +140,14 @@ def parse_jobs_zip(uploaded_file):
                     except Exception as e:
                         pass 
 
-    # Ако няма PDF, слагаме перфектно форматирания HTML профил
     if not has_pdf_cv and html_profile_text:
         cv_data["cv_text"] = html_profile_text
         
     return clean_name.title(), cv_data, photo_base64
 
-# --- THE MODAL: ГОЛЕМИЯТ КАРТОН ---
+# --- THE MODAL: ГОЛЕМИЯТ КАРТОН С ЕКШЪН ЛОГИКА ---
 @st.dialog("📄 Картон на кандидата", width="large")
-def open_candidate_card(candidate_id, candidate_name, status, raw_cv_data, photo_base64):
+def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_data, photo_base64):
     col_img, col_info = st.columns([1, 4])
     with col_img:
         if photo_base64:
@@ -166,15 +160,25 @@ def open_candidate_card(candidate_id, candidate_name, status, raw_cv_data, photo
         st.caption(f"Текущ статус: **{status}**")
     
     st.markdown("---")
+    
+    # --- ЕКШЪН ПАНЕЛ ---
     col1, col2, col3, col4 = st.columns(4)
+    statuses_list = ["Нов", "Телефонно интервю", "Живо интервю", "Одобрен", "Отхвърлен", "Преместен"]
+    current_idx = statuses_list.index(status) if status in statuses_list else 0
+    
     with col1: 
-        st.selectbox("Промени статус", ["Нов", "Телефонно интервю", "Живо интервю", "Одобрен", "Отхвърлен", "Преместен"], label_visibility="collapsed")
+        new_status = st.selectbox("Промени статус", statuses_list, index=current_idx, label_visibility="collapsed")
     with col2: 
-        st.button("💾 Запиши", use_container_width=True)
+        if st.button("💾 Запиши", use_container_width=True):
+            supabase.table("hr_applications").update({"status": new_status}).eq("id", app_id).execute()
+            st.rerun()
     with col3: 
         st.button("✉️ Сподели", use_container_width=True)
     with col4: 
-        st.button("🗑️ Изтрий", type="primary", use_container_width=True)
+        if st.button("🗑️ Изтрий", type="primary", use_container_width=True):
+            # Изтриваме записа от базата данни
+            supabase.table("hr_candidates").delete().eq("id", candidate_id).execute()
+            st.rerun()
         
     st.markdown("---")
     
@@ -275,7 +279,9 @@ def render_recruitment_module():
                 st.markdown(f"**{cand['full_name']}**")
                 st.caption(app['status'])
                 if st.button("📄 Отвори", key=f"btn_{app['id']}", use_container_width=True):
+                    # Подаваме app_id и candidate_id към картона
                     open_candidate_card(
+                        app["id"],
                         cand["id"], 
                         cand["full_name"], 
                         app["status"], 
