@@ -1,159 +1,109 @@
 import streamlit as st
 import pandas as pd
 from utils import supabase, check_permission
-import zipfile
-import io
-from bs4 import BeautifulSoup
-import PyPDF2
-import re
-import html 
-import docx
-import google.generativeai as genai
 
+# --- ТВОИТЕ ФИРМИ (Можеш да ги редактираш тук по всяко време) ---
+COMPANIES = [
+    "Фирма 1 (Строителство)", 
+    "Фирма 2 (Логистика)", 
+    "Фирма 3 (Търговия)", 
+    "Холдинг Център"
+]
+
+# --- THE MODAL: ГОЛЕМИЯТ КАРТОН НА КАНДИДАТА ---
+@st.dialog("📄 Картон на кандидата", width="large")
+def open_candidate_card(candidate_name, status):
+    st.subheader(f"👤 {candidate_name}")
+    st.caption(f"Текущ статус: **{status}**")
+    
+    # Контролен панел (Екшън бутони)
+    st.markdown("---")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.selectbox("Промени статус", ["Нов", "Телефонно интервю", "Живо интервю", "Одобрен", "Отхвърлен", "Преместен"], label_visibility="collapsed")
+    with col2:
+        st.button("💾 Запиши статус", use_container_width=True)
+    with col3:
+        st.button("✉️ Сподели профил", use_container_width=True)
+    with col4:
+        st.button("🗑️ Изтрий", type="primary", use_container_width=True)
+        
+    st.markdown("---")
+    
+    # Анатомия на досието (Табовете)
+    tabs = st.tabs(["📋 Въпросник", "📝 Бележки", "📄 CV", "📞 Интервюта", "📊 Скор-карта"])
+    
+    with tabs[0]:
+        st.info("Тук парсърът ще излее само въпросите и отговорите от HTML-а.")
+    with tabs[1]:
+        st.warning("Тук ще са вътрешните коментари от екипа и Jobs.bg бележките.")
+    with tabs[2]:
+        st.success("Тук ще е изчистеният текст от PDF-а (плюс снимката горе вляво).")
+    with tabs[3]:
+        st.write("История на интервютата и обратна връзка.")
+    with tabs[4]:
+        st.write("Слайдерите за оценка (Сервизен, Търговски и т.н.).")
+
+# --- ОСНОВЕН РЕНДЕР НА МОДУЛА ---
 def render_recruitment_module():
-    st.header("📋 Модул Рекрутмънт и Подбор (ATS)")
+    st.header("📋 Модул Подбор (V4 Enterprise)")
 
     if not check_permission("recruitment", "read"):
         st.error("Нямате достъп до този модул.")
         return
 
-    tabs = st.tabs(["📊 Канбан", "👥 База Кандидати", "💼 Позиции", "📥 Внос (Jobs.bg)", "⚙️ Настройки"])
+    # 1. HOLDING VIEW (Филтър по фирми)
+    st.write("### 🏢 Работен плот по дружества")
+    selected_company = st.pills("Изберете компания", COMPANIES, default=None)
 
-    # --- КОНФИГУРАЦИЯ НА AI ---
-    api_key = st.secrets.get("GEMINI_API_KEY")
-    if api_key:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        ai_ready = True
-    else:
-        ai_ready = False
+    if not selected_company:
+        st.info("👈 Моля, изберете фирма от холдинга, за да заредите кампаниите.")
+        return
 
-    # --- ИЗВЛИЧАНЕ НА ПОЗИЦИИТЕ ---
-    try:
-        positions_df = supabase.table("hr_positions").select("*").limit(1000).execute()
-        has_positions = bool(positions_df.data)
-    except Exception as e:
-        st.error(f"Грешка при връзка с базата: {e}")
-        has_positions = False
+    st.divider()
 
-    # --- ТАБ: ПОЗИЦИИ ---
-    with tabs[2]:
-        st.subheader("Управление на отворени позиции")
-        if check_permission("recruitment", "manage_positions"):
-            with st.form("add_position"):
-                pos_name = st.text_input("Име на позицията")
-                pos_req = st.text_area("Изисквания (за AI оценка)")
-                if st.form_submit_button("Създай позиция") and pos_name:
-                    supabase.table("hr_positions").insert({"title": pos_name, "requirements": pos_req}).execute()
-                    st.success("Позицията е създадена!")
-                    st.rerun()
-        
-        if has_positions:
-            st.table(pd.DataFrame(positions_df.data)[["title", "requirements", "created_at"]])
+    # 2. PROJECT VIEW (Обявите)
+    st.write(f"### 💼 Кампании за {selected_company}")
+    
+    # Създаване на нова позиция (Тест на Матрицата)
+    if check_permission("recruitment", "manage_positions"):
+        with st.expander("➕ Създай нова обява / кампания"):
+            with st.form("new_pos_form"):
+                pos_title = st.text_input("Име на позицията (напр. Складов работник)")
+                pos_method = st.selectbox("Метод за оценка на кандидатите", ["Процентна матрица", "Обща оценка 1-10", "Свободен текст (за AI)"])
+                
+                if st.form_submit_button("Регистрирай кампанията"):
+                    if pos_title:
+                        supabase.table("hr_positions").insert({
+                            "company_name": selected_company,
+                            "title": pos_title,
+                            "evaluation_method": pos_method
+                        }).execute()
+                        st.success("Кампанията е създадена!")
+                        st.rerun()
 
-    # --- ТАБ: ВНОС (1 ZIP = 1 Кандидат) ---
-    with tabs[3]:
-        st.subheader("Внос от Jobs.bg")
-        if check_permission("recruitment", "upload_candidates"):
-            target_pos = st.selectbox("Позиция за вноса", [p["title"] for p in positions_df.data] if has_positions else ["Няма позиции"])
-            uploaded_files = st.file_uploader("Качи ZIP архиви", type="zip", accept_multiple_files=True)
+    # Зареждане на позициите за тази фирма
+    pos_res = supabase.table("hr_positions").select("*").eq("company_name", selected_company).order("created_at", desc=True).execute()
+    positions = pos_res.data if pos_res.data else []
 
-            if uploaded_files and st.button("Стартирай импорт"):
-                target_pos_id = next((p["id"] for p in positions_df.data if p["title"] == target_pos), None)
-                count = 0
-                with st.spinner("Сглобяване на досиета..."):
-                    for uploaded_file in uploaded_files:
-                        text_parts = []
-                        # Име от ZIP
-                        raw_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
-                        candidate_name = re.sub(r'_[0-9\.\-]+$', '', raw_name).replace('_', ' ').strip()
-                        has_name = bool(candidate_name)
+    if not positions:
+        st.warning("Все още няма създадени обяви за това дружество.")
+        return
 
-                        try:
-                            with zipfile.ZipFile(uploaded_file, "r") as z:
-                                for file_name in z.namelist():
-                                    b_low = file_name.split('/')[-1].lower()
-                                    if b_low in ["jobs.bg", "business.jobs.bg"] or b_low.endswith(".url"): continue
-                                    
-                                    t = ""
-                                    if b_low.endswith((".html", ".htm")):
-                                        with z.open(file_name) as f:
-                                            soup = BeautifulSoup(f.read().decode("utf-8", errors="ignore"), "html.parser")
-                                            for br in soup.find_all("br"): br.replace_with("\n")
-                                            t = html.unescape(soup.get_text(separator=' ')).replace('\xa0', ' ')
-                                            if not has_name:
-                                                ext = soup.title.string.replace("Jobs.bg - ", "").strip() if soup.title else ""
-                                                if ext and ext.lower() not in ["jobs.bg", "business.jobs.bg"]:
-                                                    candidate_name = ext
-                                                    has_name = True
-                                    elif b_low.endswith(".pdf"):
-                                        with z.open(file_name) as f:
-                                            pdf = PyPDF2.PdfReader(f)
-                                            t = "\n".join([p.extract_text() for p in pdf.pages if p.extract_text()])
-                                    elif b_low.endswith(".docx"):
-                                        with z.open(file_name) as f:
-                                            doc = docx.Document(io.BytesIO(f.read()))
-                                            t = "\n".join([p.text for p in doc.paragraphs])
-                                    elif b_low.endswith(".doc"):
-                                        with z.open(file_name) as f:
-                                            raw_b = f.read()
-                                            dec = raw_b.decode("utf-8", errors="ignore")
-                                            if "<html" in dec.lower(): t = html.unescape(BeautifulSoup(dec, "html.parser").get_text(separator=' '))
-                                            else: t = re.sub(r'[^\w\s\.,!?-]', ' ', raw_b.decode("windows-1251", errors="ignore"))
+    # 3. GRID VIEW (Кандидатите)
+    st.divider()
+    selected_pos_title = st.selectbox("Разгледай кандидати за:", [p["title"] for p in positions])
+    
+    st.write("### 👥 Кандидати")
+    
+    # Филтър статуси (Вместо Канбан)
+    status_filter = st.pills("Филтър по статус:", ["Всички", "Нови / Некласифицирани", "За интервю", "Отхвърлени"], default="Всички")
+    
+    # Демонстрация на Картона (тъй като базата още е празна)
+    st.info("В момента базата е празна. Когато налеем ZIP-овете, тук ще има решетка от карти със снимки.")
+    
+    if st.button("👁️ Отвори Демо 'Картон на кандидата'"):
+        open_candidate_card("Любомир (Демо)", "Нов / Некласифициран")
 
-                                    if t:
-                                        t = t.replace('\x00', '').replace('\u0000', '')
-                                        text_parts.append(re.sub(r' +', ' ', t).strip())
-
-                            if text_parts:
-                                final_cv = "\n\n--- НОВ ДОКУМЕНТ ---\n\n".join(text_parts)
-                                res = supabase.table("hr_candidates").insert({"full_name": candidate_name, "cv_text": final_cv, "source": "Jobs.bg ZIP"}).execute()
-                                if res.data and target_pos_id:
-                                    supabase.table("hr_applications").insert({"candidate_id": res.data[0]["id"], "position_id": target_pos_id, "status": "Нов"}).execute()
-                                count += 1
-                        except Exception as e: st.error(f"Грешка при {uploaded_file.name}: {e}")
-                st.success(f"Импортирани {count} кандидати!")
-                st.rerun()
-
-    # --- ТАБ: КАНБАН ---
-    with tabs[0]:
-        st.subheader("Процес по подбор")
-        if has_positions:
-            selected_pos = st.selectbox("Филтър по позиция", [p["title"] for p in positions_df.data])
-            pos_data = next((p for p in positions_df.data if p["title"] == selected_pos), None)
-            
-            if pos_data:
-                apps = supabase.table("hr_applications").select("*, hr_candidates(full_name, cv_text)").eq("position_id", pos_data["id"]).execute()
-                if apps.data:
-                    df = pd.DataFrame(apps.data)
-                    cols = st.columns(4)
-                    statuses = ["Нов", "Интервю", "Одобрен", "Отхвърлен"]
-                    
-                    for i, stat in enumerate(statuses):
-                        with cols[i]:
-                            st.markdown(f"**{stat}**")
-                            stat_df = df[df["status"] == stat] if "status" in df.columns else pd.DataFrame()
-                            for _, app in stat_df.iterrows():
-                                cand = app["hr_candidates"]
-                                with st.expander(f"👤 {cand['full_name']}"):
-                                    if check_permission("recruitment", "evaluate"):
-                                        new_stat = st.selectbox("Статус", statuses, index=statuses.index(stat), key=f"st_{app['id']}", label_visibility="collapsed")
-                                        if new_stat != stat:
-                                            supabase.table("hr_applications").update({"status": new_stat}).eq("id", app["id"]).execute()
-                                            st.rerun()
-                                    
-                                    with st.popover("📄 Пълно Досие", use_container_width=True):
-                                        st.markdown(cand["cv_text"].replace('\n', '  \n'))
-                                    
-                                    if check_permission("recruitment", "evaluate"):
-                                        if st.button("✨ AI Анализ (БГ)", key=f"ai_{app['id']}", use_container_width=True):
-                                            if not ai_ready: st.error("Липсва API Key!")
-                                            else:
-                                                with st.spinner("AI анализира..."):
-                                                    prompt = f"Ти си опитен HR. СРАВНИ CV: {cand['cv_text']} С ИЗИСКВАНИЯ: {pos_data['requirements']}. ДАЙ НА БЪЛГАРСКИ: Резюме, Силни страни, Рискове и Оценка 1-10."
-                                                    response = model.generate_content(prompt)
-                                                    supabase.table("hr_applications").update({"ai_score": response.text}).eq("id", app["id"]).execute()
-                                                    st.rerun()
-
-                                    if app.get("ai_score"):
-                                        st.success(app["ai_score"])
+if __name__ == "__main__":
+    render_recruitment_module()
