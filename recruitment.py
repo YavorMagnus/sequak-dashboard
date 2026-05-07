@@ -13,7 +13,7 @@ import re
 def render_recruitment_module():
     st.header("📋 Модул Рекрутмънт и Подбор (ATS)")
 
-    # ПРАВИЛНАТА ПРОВЕРКА: извикваме функцията с двата нужни аргумента
+    # Проверка на правата
     if not check_permission("recruitment", "read"):
         st.error("Нямате достъп до този модул.")
         return
@@ -40,9 +40,12 @@ def render_recruitment_module():
                 submit_pos = st.form_submit_button("Създай позиция")
 
                 if submit_pos and pos_name:
-                    supabase.table("hr_positions").insert({"title": pos_name, "requirements": pos_req}).execute()
-                    st.success("Позицията е създадена!")
-                    st.rerun()
+                    try:
+                        supabase.table("hr_positions").insert({"title": pos_name, "requirements": pos_req}).execute()
+                        st.success("Позицията е създадена!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Грешка при запис (Проверете дали имате колона 'requirements' в Supabase): {e}")
         else:
             st.info("Нямате права за създаване на нови позиции. Режим на четене.")
 
@@ -156,7 +159,8 @@ def render_recruitment_module():
             selected_kanban_pos = st.selectbox("Филтър по позиция", [p["title"] for p in positions_df.data], key="kanban_filter")
             
             try:
-                apps_query = supabase.table("hr_applications").select("*, hr_candidates(full_name, cv_text), hr_positions(title, requirements)").limit(100000).execute()
+                # ЗАЩИТА: Вече не изискваме колоната requirements в Join заявката, за да не гърми, ако липсва в базата.
+                apps_query = supabase.table("hr_applications").select("*, hr_candidates(full_name, cv_text), hr_positions(title)").limit(100000).execute()
                 
                 if apps_query.data:
                     apps_df = pd.DataFrame(apps_query.data)
@@ -191,8 +195,18 @@ def render_recruitment_module():
                                         # --- AI ОЦЕНКА ---
                                         if check_permission("recruitment", "evaluate"):
                                             if st.button("✨ Генерирай AI Оценка", key=f"ai_{app['id']}"):
-                                                st.info("Връзка с Gemini API... (Тук се изпраща CV + Изисквания)")
-                                                mock_ai = "Оценка: 8/10. Кандидатът има отличен опит с машини, но липсва опит в онлайн ритейла."
+                                                st.info("Връзка с Gemini API... (Подготвяме данните)")
+                                                
+                                                # Извличаме изискванията безопасно от вече заредените позиции
+                                                req_text = "Няма въведени изисквания"
+                                                for p in positions_df.data:
+                                                    if p.get("title") == selected_kanban_pos:
+                                                        req_text = p.get("requirements", "Няма въведени изисквания")
+                                                        break
+                                                
+                                                # Тук ще подадем cv_text и req_text към Gemini API
+                                                mock_ai = f"Оценка: 8/10. (Матрица: {req_text[:30]}...) Кандидатът изглежда добре."
+                                                
                                                 supabase.table("hr_applications").update({"ai_score": mock_ai}).eq("id", app["id"]).execute()
                                                 st.success("Оценката е генерирана!")
                                                 st.rerun()
