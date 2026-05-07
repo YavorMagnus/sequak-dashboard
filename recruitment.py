@@ -144,41 +144,43 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
         elif new_status == "Отказал":
             candidate_reason = st.selectbox("Уточнете причината на кандидата:", ["Започнал друга работа", "Недоволен от условията", "Друго"])
         elif new_status == "Преместен":
-            # Филтрираме всички позиции, които не са текущата
             other_positions = [p for p in all_global_positions if p["id"] != current_pos_id]
             if other_positions:
-                # Създаваме красив списък за избор: Име на позиция (Име на Фирма)
                 pos_options = [f"{p['title']} ({p['company_name']})" for p in other_positions]
                 target_pos_formatted = st.selectbox("Изберете целева кампания (в целия холдинг):", pos_options)
-                
-                # Намираме ID-то на избраната позиция
                 for p in other_positions:
                     if f"{p['title']} ({p['company_name']})" == target_pos_formatted:
                         move_to_pos_id = p["id"]
                         break
             else:
-                st.warning("Няма други отворени кампании в целия холдинг.")
+                st.warning("Няма други отворени кампании.")
                 
         st.markdown("</div>", unsafe_allow_html=True)
 
     with col2: 
         if st.button("💾 Запиши промяна", use_container_width=True):
+            user_name = st.session_state.get("user_name", "Y.Nikolov")
+            
             if new_status == "Преместен" and move_to_pos_id:
-                # Преместване на кандидата (може да е в друга фирма)
-                supabase.table("hr_applications").update({"position_id": move_to_pos_id, "status": "Нов"}).eq("id", app_id).execute()
+                # Вземаме информацията за "преди"
                 curr_title = next(p["title"] for p in all_global_positions if p["id"] == current_pos_id)
                 curr_company = next(p["company_name"] for p in all_global_positions if p["id"] == current_pos_id)
-                supabase.table("hr_comments").insert({"application_id": app_id, "author_name": "🤖 Система", "comment_text": f"🔄 Кандидатът е преместен тук от кампания '{curr_title}' ({curr_company})"}).execute()
+                
+                # Преместване
+                supabase.table("hr_applications").update({"position_id": move_to_pos_id, "status": "Нов"}).eq("id", app_id).execute()
+                
+                # ПЕРФЕКТНИЯТ AUDIT TRAIL:
+                audit_msg = f"🔄 Преместен от {user_name}. Източник: кампания '{curr_title}' ({curr_company})"
+                supabase.table("hr_comments").insert({"application_id": app_id, "author_name": "🤖 Система", "comment_text": audit_msg}).execute()
             else:
-                # Нормална смяна на статус
+                # Нормална смяна
                 supabase.table("hr_applications").update({"status": new_status}).eq("id", app_id).execute()
                 
-                # Записване на Системна бележка с причината
                 reason_text = ""
                 if new_status == "Отхвърлен" and reject_reason:
-                    reason_text = f"🛑 Отхвърлен от нас. Причина: {reject_reason}"
+                    reason_text = f"🛑 Отхвърлен от {user_name}. Причина: {reject_reason}"
                 elif new_status == "Отказал" and candidate_reason:
-                    reason_text = f"🚶 Отказал се. Причина: {candidate_reason}"
+                    reason_text = f"🚶 Кандидатът отказа пред {user_name}. Причина: {candidate_reason}"
                 
                 if reason_text:
                     supabase.table("hr_comments").insert({"application_id": app_id, "author_name": "🤖 Система", "comment_text": reason_text}).execute()
@@ -201,7 +203,8 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
         st.write("### 💬 Вътрешни бележки")
         comments_res = supabase.table("hr_comments").select("*").eq("application_id", app_id).order("created_at").execute()
         for comm in (comments_res.data or []):
-            with st.chat_message("user" if comm['author_name'] != "🤖 Система" else "assistant"):
+            is_system = comm['author_name'] == "🤖 Система"
+            with st.chat_message("user" if not is_system else "assistant"):
                 st.write(f"**{comm['author_name']}** ({comm['created_at'][:16]})")
                 st.write(comm['comment_text'])
         
@@ -219,20 +222,17 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
         current_scores = manual_score if manual_score else {cat: 0 for cat in SCORE_CATEGORIES}
         new_scores = {}
         total_score = 0
-        
         for cat in SCORE_CATEGORIES:
             val = st.slider(cat, 0, 100, int(current_scores.get(cat, 0)), step=5, format="%d%%")
             new_scores[cat] = val
             total_score += val
-            
         st.divider()
         if total_score != 100:
-            st.error(f"🚨 **Внимание:** Текущата сума е **{total_score}%**. Моля, разпределете точно 100%, за да запазите.")
+            st.error(f"🚨 Сума: **{total_score}%**. Разпределете 100% за запис.")
             btn_disabled = True
         else:
-            st.success("✅ **Перфектно!** Сумата е точно 100%. Можете да запишете оценката.")
+            st.success("✅ Сумата е 100%. Можете да запишете.")
             btn_disabled = False
-            
         if st.button("💾 Запиши оценка", disabled=btn_disabled, use_container_width=True):
             supabase.table("hr_applications").update({"manual_score": new_scores}).eq("id", app_id).execute()
             st.rerun()
@@ -248,16 +248,11 @@ def render_recruitment_module():
         st.info("👈 Изберете фирма, за да заредите кампаниите."); return
 
     st.divider()
-    
-    # ИЗВЛИЧАМЕ ВСИЧКИ ПОЗИЦИИ ОТ ЦЕЛИЯ ХОЛДИНГ (За опцията "Преместен")
     all_pos_res = supabase.table("hr_positions").select("*").order("company_name").order("title").execute()
     all_global_positions = all_pos_res.data if all_pos_res.data else []
-
-    # Филтрираме позициите само за текущо избраната фирма (За изгледа на екрана)
     current_company_positions = [p for p in all_global_positions if p["company_name"] == selected_company]
 
     st.write(f"### 💼 Кампании за {selected_company}")
-    
     if check_permission("recruitment", "manage_positions"):
         with st.expander("➕ Нова кампания"):
             with st.form("new_pos"):
@@ -267,7 +262,7 @@ def render_recruitment_module():
                     if t: supabase.table("hr_positions").insert({"company_name": selected_company, "title": t, "evaluation_method": pos_method}).execute(); st.rerun()
 
     if not current_company_positions: 
-        st.warning("Няма кампании за тази фирма."); return
+        st.warning("Няма кампании."); return
 
     selected_pos_title = st.selectbox("Разгледай кампания:", [p["title"] for p in current_company_positions])
     target_pos_id = next(p["id"] for p in current_company_positions if p["title"] == selected_pos_title)
@@ -297,7 +292,6 @@ def render_recruitment_module():
                 st.markdown(f"**{cand['full_name']}**", help=f"Дата на качване: {app['created_at'][:10]}")
                 st.caption(app['status'])
                 if st.button("📄 Отвори", key=f"btn_{app['id']}", use_container_width=True):
-                    # Подаваме ГЛОБАЛНИТЕ позиции към картона, за да може да местим из целия холдинг!
                     open_candidate_card(app["id"], cand["id"], cand["full_name"], app["status"], cand["raw_cv_data"], cand["photo_thumbnail"], app["manual_score"], all_global_positions, target_pos_id)
     else: st.info("Няма кандидати.")
 
