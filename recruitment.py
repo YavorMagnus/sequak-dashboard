@@ -6,6 +6,7 @@ import io
 from bs4 import BeautifulSoup
 import PyPDF2
 import re
+import html # НОВО: Вградена библиотека за чистене на &nbsp; и HTML символи
 
 # ЗАБЕЛЕЖКА: Gemini API Key трябва да бъде добавен в st.secrets за сигурност
 # import google.generativeai as genai
@@ -32,7 +33,6 @@ def render_recruitment_module():
     with tabs[2]:
         st.subheader("Управление на отворени позиции")
         
-        # Визуализираме формата за създаване САМО ако потребителят има право "manage_positions"
         if check_permission("recruitment", "manage_positions"):
             with st.form("add_position"):
                 pos_name = st.text_input("Име на позицията (напр. Механик, Търговски представител)")
@@ -51,7 +51,6 @@ def render_recruitment_module():
 
         if has_positions:
             df_p = pd.DataFrame(positions_df.data)
-            # Защита: Показваме само колоните, които реално съществуват в DataFrame-а
             cols_to_show = [c for c in ["title", "requirements", "created_at"] if c in df_p.columns]
             st.table(df_p[cols_to_show])
         else:
@@ -88,7 +87,12 @@ def render_recruitment_module():
                                         p.append("\n")
                                     
                                     raw_text = soup.get_text(separator=' ')
-                                    clean_text = re.sub(r' +', ' ', raw_text)
+                                    
+                                    # НОВО: Чистене на &nbsp; и други HTML entity-та ПРЕДИ regex-а
+                                    clean_text = html.unescape(raw_text)
+                                    clean_text = clean_text.replace('\xa0', ' ') # Застраховка срещу твърди интервали
+                                    
+                                    clean_text = re.sub(r' +', ' ', clean_text)
                                     clean_text = re.sub(r'\n\s*\n', '\n\n', clean_text).strip()
                                     candidate_name = soup.title.string.replace("Jobs.bg - ", "") if soup.title else "Неизвестен"
                                     
@@ -165,9 +169,8 @@ def render_recruitment_module():
                     apps_df = pd.DataFrame(apps_query.data)
                     
                     if 'hr_positions' not in apps_df.columns or 'hr_candidates' not in apps_df.columns:
-                        st.error("⚠️ Базата данни е празна или липсват Foreign Keys (релации) между таблиците hr_applications, hr_positions и hr_candidates в Supabase.")
+                        st.error("⚠️ Базата данни е празна или липсват Foreign Keys.")
                     else:
-                        # ДЕФАНЗИВНО ПРОГРАМИРАНЕ: Ако колоните липсват, ги създаваме виртуално
                         if "status" not in apps_df.columns:
                             apps_df["status"] = "Нов"
                         if "ai_score" not in apps_df.columns:
@@ -188,44 +191,43 @@ def render_recruitment_module():
                                     cv_text = app.get('hr_candidates', {}).get('cv_text', 'Няма данни') if isinstance(app.get('hr_candidates'), dict) else 'Няма данни'
                                     
                                     with st.expander(f"👤 {cand_name}"):
-                                        st.write(f"ID: {app.get('id', 'N/A')}")
-                                        
-                                        # Редакция на статус (изисква evaluate права, защото е местене по канбан)
+                                        # Редакция на статус
                                         if check_permission("recruitment", "evaluate"):
                                             current_status = app.get("status", "Нов")
-                                            # Защита: Ако статусът в базата не е в списъка, слагаме го на "Нов"
                                             if current_status not in statuses:
                                                 current_status = "Нов"
                                                 
-                                            new_status = st.selectbox("Промени статус", statuses, index=statuses.index(current_status), key=f"status_{app.get('id', i)}")
+                                            new_status = st.selectbox("Статус", statuses, index=statuses.index(current_status), key=f"status_{app.get('id', i)}", label_visibility="collapsed")
                                             if new_status != current_status:
                                                 supabase.table("hr_applications").update({"status": new_status}).eq("id", app["id"]).execute()
                                                 st.rerun()
                                         
-                                        # --- AI ОЦЕНКА ---
+                                        # НОВО: Изскачащ широк прозорец за CV-то
+                                        with st.popover("📄 Прочети оригинално CV", use_container_width=True):
+                                            st.markdown(f"**Оригинално CV на {cand_name}**")
+                                            st.text_area("Текст:", value=cv_text, height=400, disabled=True, label_visibility="collapsed")
+                                        
+                                        # --- AI ОЦЕНКА И ПРЕВОД ---
                                         if check_permission("recruitment", "evaluate"):
-                                            if st.button("✨ Генерирай AI Оценка", key=f"ai_{app.get('id', i)}"):
-                                                st.info("Връзка с Gemini API... (Подготвяме данните)")
+                                            if st.button("✨ AI Анализ и БГ Превод", key=f"ai_{app.get('id', i)}", use_container_width=True):
+                                                st.info("Връзка с Gemini API... (Очакваме интеграция)")
                                                 
-                                                # Извличаме изискванията безопасно от вече заредените позиции
                                                 req_text = "Няма въведени изисквания"
                                                 for p in positions_df.data:
                                                     if p.get("title") == selected_kanban_pos:
                                                         req_text = p.get("requirements", "Няма въведени изисквания")
                                                         break
                                                 
-                                                # Тук ще подадем cv_text и req_text към Gemini API
-                                                mock_ai = f"Оценка: 8/10. (Матрица: {req_text[:30]}...) Кандидатът изглежда добре."
+                                                # ТУК ще сложим реалния код за Gemini, който ще върне преведен анализ
+                                                mock_ai = f"**🤖 AI Резюме (на Български):**\nКандидатът има нужния опит, но му липсват специфични технически умения. Оценка: 7/10."
                                                 
                                                 supabase.table("hr_applications").update({"ai_score": mock_ai}).eq("id", app["id"]).execute()
-                                                st.success("Оценката е генерирана!")
+                                                st.success("Анализът е готов!")
                                                 st.rerun()
 
                                         if app.get("ai_score"):
-                                            st.info(f"AI Анализ: {app['ai_score']}")
+                                            st.info(app['ai_score'])
 
-                                        if st.checkbox("Виж извлечено CV", key=f"cv_{app.get('id', i)}"):
-                                            st.text_area("Текст от CV (структуриран):", value=cv_text, height=300)
                 else:
                     st.info("Няма кандидати за тази позиция.")
             except Exception as e:
@@ -257,6 +259,5 @@ def render_recruitment_module():
         else:
             st.info("Само за Супер-админ")
 
-# Стартиране на модула (ако се вика директно за тест)
 if __name__ == "__main__":
     render_recruitment_module()
