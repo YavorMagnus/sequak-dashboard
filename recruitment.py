@@ -54,7 +54,7 @@ def render_recruitment_module():
             cols_to_show = [c for c in ["title", "requirements", "created_at"] if c in df_p.columns]
             st.table(df_p[cols_to_show])
         else:
-            st.info("Все হাস্য няма създадени отворени позиции.")
+            st.info("Все още няма създадени отворени позиции.")
 
     # --- ТАБ: ВНОС ---
     with tabs[3]:
@@ -75,14 +75,19 @@ def render_recruitment_module():
                     count = 0
                     errors_log = [] 
                     
+                    # ОПТИМИЗАЦИЯ 1: Взимаме ID-то на позицията предварително, за да не питаме базата 100 пъти
+                    target_pos_id = None
+                    for p in positions_df.data:
+                        if p["title"] == target_pos:
+                            target_pos_id = p["id"]
+                            break
+                    
                     with st.spinner("Интелигентен парсинг (Извличане на правилни имена)..."):
                         for uploaded_file in uploaded_files:
                             try:
                                 candidate_text_parts = []
                                 
-                                # ИДЕЯТА ТИ ЗА ZIP ИМЕТО: Jobs.bg ги кръщава "Ivan_Ivanov_14.36.zip"
                                 raw_zip_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
-                                # Махаме цифрите и точките накрая (часа), заменяме долните черти с интервал
                                 clean_zip_name = re.sub(r'_[0-9\.\-]+$', '', raw_zip_name).replace('_', ' ').strip()
                                 
                                 candidate_name = clean_zip_name if clean_zip_name else "Неизвестен"
@@ -92,13 +97,12 @@ def render_recruitment_module():
                                     for file_name in z.namelist():
                                         base_name_lower = file_name.split('/')[-1].lower()
                                         
-                                        # Режем системен боклук
                                         if base_name_lower in ["jobs.bg", "business.jobs.bg"] or base_name_lower.endswith(".url"):
                                             continue
 
                                         clean_text = ""
 
-                                        # 1. Парсване на HTML (Въпросници)
+                                        # 1. HTML
                                         if base_name_lower.endswith((".html", ".htm")):
                                             with z.open(file_name) as f:
                                                 html_content = f.read().decode("utf-8", errors="ignore")
@@ -110,14 +114,13 @@ def render_recruitment_module():
                                                 raw_text = soup.get_text(separator=' ')
                                                 clean_text = html.unescape(raw_text).replace('\xa0', ' ')
                                                 
-                                                # ИДЕЯТА ТИ ЗА ВЪПРОСНИКА: Търсим името в текста, ако ZIP името е лошо
                                                 if not has_beautiful_name:
                                                     lines = [line.strip() for line in clean_text.split('\n') if line.strip()]
                                                     if len(lines) >= 2 and "jobs.bg" in lines[0].lower():
-                                                        candidate_name = lines[1] # Вторият ред обикновено е името
+                                                        candidate_name = lines[1] 
                                                         has_beautiful_name = True
                                                 
-                                        # 2. Парсване на PDF
+                                        # 2. PDF
                                         elif base_name_lower.endswith(".pdf"):
                                             with z.open(file_name) as f:
                                                 pdf_reader = PyPDF2.PdfReader(f)
@@ -126,18 +129,16 @@ def render_recruitment_module():
                                                     extracted = page.extract_text()
                                                     if extracted: raw_text += extracted + "\n"
                                                 clean_text = raw_text
-                                                # ВЕЧЕ НЕ ПРЕЗАПИСВАМЕ ИМЕТО ОТ ФАЙЛА!
                                                 
-                                        # 3. Парсване на Word (.docx)
+                                        # 3. Word (.docx)
                                         elif base_name_lower.endswith(".docx"):
                                             with z.open(file_name) as f:
                                                 file_stream = io.BytesIO(f.read())
                                                 doc = docx.Document(file_stream)
                                                 raw_text = "\n".join([para.text for para in doc.paragraphs])
                                                 clean_text = raw_text
-                                                # ВЕЧЕ НЕ ПРЕЗАПИСВАМЕ ИМЕТО ОТ ФАЙЛА!
                                                 
-                                        # 4. Парсване на стари Word документи (.doc)
+                                        # 4. Old Word (.doc)
                                         elif base_name_lower.endswith(".doc"):
                                             with z.open(file_name) as f:
                                                 raw_bytes = f.read()
@@ -150,9 +151,8 @@ def render_recruitment_module():
                                                 else:
                                                     text = raw_bytes.decode("windows-1251", errors="ignore")
                                                     clean_text = re.sub(r'[^\w\s\.,!?-]', ' ', text)
-                                                # ВЕЧЕ НЕ ПРЕЗАПИСВАМЕ ИМЕТО ОТ ФАЙЛА!
                                             
-                                        # Финално чистене и добавяне към досието
+                                        # Чистене
                                         if clean_text:
                                             clean_text = clean_text.replace('\x00', '').replace('\u0000', '')
                                             clean_text = re.sub(r' +', ' ', clean_text)
@@ -161,7 +161,6 @@ def render_recruitment_module():
                                             if len(clean_text) > 10: 
                                                 candidate_text_parts.append(clean_text)
 
-                                # Създаване на профил
                                 if candidate_text_parts:
                                     final_cv_text = "\n\n--- ДОПЪЛНИТЕЛЕН ДОКУМЕНТ ---\n\n".join(candidate_text_parts)
                                     
@@ -173,15 +172,13 @@ def render_recruitment_module():
                                     
                                     res = supabase.table("hr_candidates").insert(candidate_data).execute()
                                     
-                                    if res.data:
+                                    if res.data and target_pos_id:
                                         cand_id = res.data[0]["id"]
-                                        pos_id_data = supabase.table("hr_positions").select("id").eq("title", target_pos).execute()
-                                        if pos_id_data.data:
-                                            supabase.table("hr_applications").insert({
-                                                "candidate_id": cand_id,
-                                                "position_id": pos_id_data.data[0]["id"],
-                                                "status": "Нов"
-                                            }).execute()
+                                        supabase.table("hr_applications").insert({
+                                            "candidate_id": cand_id,
+                                            "position_id": target_pos_id,
+                                            "status": "Нов"
+                                        }).execute()
                                     count += 1
                                 else:
                                     errors_log.append(f"⚠️ Архивът {uploaded_file.name} не съдържа четими CV формати.")
@@ -189,7 +186,6 @@ def render_recruitment_module():
                             except Exception as zip_err:
                                 errors_log.append(f"❌ Грешка при отваряне на архив {uploaded_file.name}: {zip_err}")
 
-                    # Финален репорт
                     if count > 0:
                         st.success(f"🎉 Успешно създадени {count} пълни профили на кандидати!")
                     else:
@@ -208,67 +204,78 @@ def render_recruitment_module():
         if has_positions:
             selected_kanban_pos = st.selectbox("Филтър по позиция", [p["title"] for p in positions_df.data], key="kanban_filter")
             
-            try:
-                apps_query = supabase.table("hr_applications").select("*, hr_candidates(full_name, cv_text), hr_positions(title)").limit(100000).execute()
-                
-                if apps_query.data:
-                    apps_df = pd.DataFrame(apps_query.data)
+            # ОПТИМИЗАЦИЯ 2: Взимаме ID-то на позицията и филтрираме директно в базата данни!
+            selected_pos_id = None
+            for p in positions_df.data:
+                if p["title"] == selected_kanban_pos:
+                    selected_pos_id = p["id"]
+                    break
                     
-                    if 'hr_positions' not in apps_df.columns or 'hr_candidates' not in apps_df.columns:
-                        st.error("⚠️ Базата данни е празна или липсват Foreign Keys.")
+            if selected_pos_id:
+                try:
+                    # Теглим само тези апликации, които са за конкретната позиция. Базата работи бързо!
+                    apps_query = supabase.table("hr_applications").select(
+                        "*, hr_candidates(full_name, cv_text), hr_positions(title)"
+                    ).eq("position_id", selected_pos_id).limit(100000).execute()
+                    
+                    if apps_query.data:
+                        apps_df = pd.DataFrame(apps_query.data)
+                        
+                        if 'hr_positions' not in apps_df.columns or 'hr_candidates' not in apps_df.columns:
+                            st.error("⚠️ Базата данни е празна или липсват Foreign Keys.")
+                        else:
+                            if "status" not in apps_df.columns:
+                                apps_df["status"] = "Нов"
+                            if "ai_score" not in apps_df.columns:
+                                apps_df["ai_score"] = None
+
+                            cols = st.columns(4)
+                            statuses = ["Нов", "Интервю", "Одобрен", "Отхвърлен"]
+                            
+                            for i, status in enumerate(statuses):
+                                with cols[i]:
+                                    st.markdown(f"**{status}**")
+                                    status_apps = apps_df[apps_df["status"] == status]
+                                    for _, app in status_apps.iterrows():
+                                        
+                                        cand_name = app.get('hr_candidates', {}).get('full_name', 'Неизвестен') if isinstance(app.get('hr_candidates'), dict) else 'Неизвестен'
+                                        cv_text = app.get('hr_candidates', {}).get('cv_text', 'Няма данни') if isinstance(app.get('hr_candidates'), dict) else 'Няма данни'
+                                        
+                                        formatted_cv = cv_text.replace('\n', '  \n')
+                                        
+                                        with st.expander(f"👤 {cand_name}"):
+                                            if check_permission("recruitment", "evaluate"):
+                                                current_status = app.get("status", "Нов")
+                                                if current_status not in statuses:
+                                                    current_status = "Нов"
+                                                    
+                                                new_status = st.selectbox("Статус", statuses, index=statuses.index(current_status), key=f"status_{app.get('id', i)}", label_visibility="collapsed")
+                                                if new_status != current_status:
+                                                    supabase.table("hr_applications").update({"status": new_status}).eq("id", app["id"]).execute()
+                                                    st.rerun()
+                                            
+                                            with st.popover("📄 Прочети пълно досие (CV + Въпросници)", use_container_width=True):
+                                                st.markdown(f"### Пълно досие на {cand_name}")
+                                                st.markdown("---")
+                                                st.markdown(formatted_cv)
+                                            
+                                            if check_permission("recruitment", "evaluate"):
+                                                if st.button("✨ AI Анализ и БГ Превод", key=f"ai_{app.get('id', i)}", use_container_width=True):
+                                                    st.info("Връзка с Gemini API... (Очакваме интеграция)")
+                                                    mock_ai = f"**🤖 AI Резюме (на Български):**\nКандидатът има нужния опит, но му липсват специфични технически умения. Оценка: 7/10."
+                                                    supabase.table("hr_applications").update({"ai_score": mock_ai}).eq("id", app["id"]).execute()
+                                                    st.success("Анализът е готов!")
+                                                    st.rerun()
+
+                                            if app.get("ai_score"):
+                                                st.success(app['ai_score'])
+
                     else:
-                        if "status" not in apps_df.columns:
-                            apps_df["status"] = "Нов"
-                        if "ai_score" not in apps_df.columns:
-                            apps_df["ai_score"] = None
-
-                        apps_df = apps_df[apps_df['hr_positions'].apply(lambda x: x.get('title') == selected_kanban_pos if isinstance(x, dict) else False)]
-                        
-                        cols = st.columns(4)
-                        statuses = ["Нов", "Интервю", "Одобрен", "Отхвърлен"]
-                        
-                        for i, status in enumerate(statuses):
-                            with cols[i]:
-                                st.markdown(f"**{status}**")
-                                status_apps = apps_df[apps_df["status"] == status]
-                                for _, app in status_apps.iterrows():
-                                    
-                                    cand_name = app.get('hr_candidates', {}).get('full_name', 'Неизвестен') if isinstance(app.get('hr_candidates'), dict) else 'Неизвестен'
-                                    cv_text = app.get('hr_candidates', {}).get('cv_text', 'Няма данни') if isinstance(app.get('hr_candidates'), dict) else 'Няма данни'
-                                    
-                                    formatted_cv = cv_text.replace('\n', '  \n')
-                                    
-                                    with st.expander(f"👤 {cand_name}"):
-                                        if check_permission("recruitment", "evaluate"):
-                                            current_status = app.get("status", "Нов")
-                                            if current_status not in statuses:
-                                                current_status = "Нов"
-                                                
-                                            new_status = st.selectbox("Статус", statuses, index=statuses.index(current_status), key=f"status_{app.get('id', i)}", label_visibility="collapsed")
-                                            if new_status != current_status:
-                                                supabase.table("hr_applications").update({"status": new_status}).eq("id", app["id"]).execute()
-                                                st.rerun()
-                                        
-                                        with st.popover("📄 Прочети пълно досие (CV + Въпросници)", use_container_width=True):
-                                            st.markdown(f"### Пълно досие на {cand_name}")
-                                            st.markdown("---")
-                                            st.markdown(formatted_cv)
-                                        
-                                        if check_permission("recruitment", "evaluate"):
-                                            if st.button("✨ AI Анализ и БГ Превод", key=f"ai_{app.get('id', i)}", use_container_width=True):
-                                                st.info("Връзка с Gemini API... (Очакваме интеграция)")
-                                                mock_ai = f"**🤖 AI Резюме (на Български):**\nКандидатът има нужния опит, но му липсват специфични технически умения. Оценка: 7/10."
-                                                supabase.table("hr_applications").update({"ai_score": mock_ai}).eq("id", app["id"]).execute()
-                                                st.success("Анализът е готов!")
-                                                st.rerun()
-
-                                        if app.get("ai_score"):
-                                            st.success(app['ai_score'])
-
-                else:
-                    st.info("Няма кандидати за тази позиция.")
-            except Exception as e:
-                 st.error(f"Грешка при зареждане на Канбан дъската: {e}")
+                        st.info("Няма кандидати за тази позиция.")
+                except Exception as e:
+                     st.error(f"Грешка при зареждане на Канбан дъската: {e}")
+            else:
+                 st.warning("Изберете валидна позиция.")
         else:
             st.warning("Създайте позиция, за да заредите Канбан дъската.")
 
@@ -276,7 +283,8 @@ def render_recruitment_module():
     with tabs[1]:
         st.subheader("Всички кандидати в системата")
         try:
-            candidates_data = supabase.table("hr_candidates").select("*").limit(100000).execute()
+            # Избягваме теглене на гигантските текстове на CV-тата за таблицата с общ преглед
+            candidates_data = supabase.table("hr_candidates").select("id, full_name, source, created_at").limit(100000).execute()
             if candidates_data.data:
                 df_c = pd.DataFrame(candidates_data.data)
                 cols_to_show_c = [c for c in ["full_name", "source", "created_at"] if c in df_c.columns]
