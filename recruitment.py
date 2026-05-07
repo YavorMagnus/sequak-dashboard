@@ -16,7 +16,7 @@ COMPANIES = [
     "Холдинг Център"
 ]
 
-# --- УМНО ИЗЧИСТВАНЕ НА HTML (V5 - Езиково Независим) ---
+# --- УМНО ИЗЧИСТВАНЕ НА HTML (V6 - Без убиеца на нови редове) ---
 def clean_html_text(html_bytes):
     soup = BeautifulSoup(html_bytes.decode("utf-8", errors="ignore"), "html.parser")
     
@@ -24,7 +24,7 @@ def clean_html_text(html_bytes):
     for tag in soup(["script", "style", "head", "noscript", "title"]):
         tag.extract()
         
-    # 2. Jobs.bg специфично Markdown форматиране
+    # 2. Поставяне на Markdown маркери
     for label in soup.find_all("label"):
         label.insert_before("**")
         label.insert_after("**")
@@ -32,11 +32,11 @@ def clean_html_text(html_bytes):
 
     for h5 in soup.find_all("h5"):
         h5.insert_before("\n\n### ")
-        h5.insert_after("\n")
+        h5.insert_after("\n\n")
         h5.unwrap()
 
     for h6 in soup.find_all("h6"):
-        h6.insert_before("\n**")
+        h6.insert_before("\n\n**")
         h6.insert_after("**\n")
         h6.unwrap()
 
@@ -56,18 +56,26 @@ def clean_html_text(html_bytes):
     for block in soup.find_all(["div", "p", "tr", "li", "h1", "h2", "h3", "h4"]):
         block.insert_after("\n")
         
-    # 3. Извличане и финално изчистване
-    text = soup.get_text(separator=' ', strip=True)
+    # 3. Извличане на текста (БЕЗ strip=True, за да запазим новите редове!)
+    text = soup.get_text(separator=' ')
     
-    text = re.sub(r'\*\*\s+(.*?)\s+\*\*', r'**\1**', text)
-    text = re.sub(r'\*\s+(.*?)\s+\*', r'*\1*', text)
+    # 4. Почистване на параграфите (Regex магия за красив текст)
+    text = re.sub(r'[ \t]+', ' ', text)         # Свиваме множествени интервали
+    text = re.sub(r'\*\* +', '**', text)        # Махаме интервал след отварящ болд
+    text = re.sub(r' +\*\*', '**', text)        # Махаме интервал преди затварящ болд
+    text = re.sub(r'\* +', '*', text)           # Същото за курсив
+    text = re.sub(r' +\*', '*', text)           # Същото за курсив
+    text = text.replace('** :', '**: ')         # Поправяме двуточията
+    text = re.sub(r' \n', '\n', text)           # Махаме интервали преди нов ред
+    text = re.sub(r'\n ', '\n', text)           # Махаме интервали след нов ред
+    text = re.sub(r'\n{3,}', '\n\n', text)      # Максимум два празни реда един след друг
     
-    text = re.sub(r'[ \t]+', ' ', text)
-    text = re.sub(r'\n\s*\n+', '\n\n', text)
+    # За да може Streamlit да ги рендерира като истински нови редове
+    text = text.replace('\n', '  \n')
     
     return text.strip()
 
-# --- УМНИЯТ ПАРСЪР V5 ---
+# --- УМНИЯТ ПАРСЪР ---
 def parse_jobs_zip(uploaded_file):
     raw_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
     name_no_dates = re.sub(r'_[0-9]{2}\.[0-9]{2}\.[0-9]{4}.*', '', raw_name)
