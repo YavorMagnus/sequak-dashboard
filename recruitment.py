@@ -16,7 +16,7 @@ COMPANIES = [
     "Холдинг Център"
 ]
 
-# --- УМНО ИЗЧИСТВАНЕ НА HTML (V4 - Jobs.bg Native) ---
+# --- УМНО ИЗЧИСТВАНЕ НА HTML (V5 - Езиково Независим) ---
 def clean_html_text(html_bytes):
     soup = BeautifulSoup(html_bytes.decode("utf-8", errors="ignore"), "html.parser")
     
@@ -25,48 +25,40 @@ def clean_html_text(html_bytes):
         tag.extract()
         
     # 2. Jobs.bg специфично Markdown форматиране
-    # Етикети (напр. Дата на раждане) -> Bold
     for label in soup.find_all("label"):
         label.insert_before("**")
         label.insert_after("**")
         label.unwrap()
 
-    # Основни секции -> Markdown Заглавие 3
     for h5 in soup.find_all("h5"):
         h5.insert_before("\n\n### ")
         h5.insert_after("\n")
         h5.unwrap()
 
-    # Заглавия на длъжности -> Bold
     for h6 in soup.find_all("h6"):
         h6.insert_before("\n**")
         h6.insert_after("**\n")
         h6.unwrap()
 
-    # Дати (overline) -> Курсив
     for overline in soup.find_all(class_="overline"):
         overline.insert_before("\n*")
         overline.insert_after("*\n")
         overline.unwrap()
 
-    # Списъци с детайли (item) -> Булети
     for item in soup.find_all(class_="item"):
         item.insert_before("\n- ")
         item.insert_after("\n")
         item.unwrap()
         
-    # Смяна на <br> с нови редове
     for br in soup.find_all("br"):
         br.replace_with("\n")
         
-    # Добавяне на нов ред след всеки блоков елемент
     for block in soup.find_all(["div", "p", "tr", "li", "h1", "h2", "h3", "h4"]):
         block.insert_after("\n")
         
     # 3. Извличане и финално изчистване
     text = soup.get_text(separator=' ', strip=True)
     
-    # Фиксиране на празни места около Markdown символите, ако са се появили
     text = re.sub(r'\*\*\s+(.*?)\s+\*\*', r'**\1**', text)
     text = re.sub(r'\*\s+(.*?)\s+\*', r'*\1*', text)
     
@@ -75,7 +67,7 @@ def clean_html_text(html_bytes):
     
     return text.strip()
 
-# --- УМНИЯТ ПАРСЪР V4 ---
+# --- УМНИЯТ ПАРСЪР V5 ---
 def parse_jobs_zip(uploaded_file):
     raw_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
     name_no_dates = re.sub(r'_[0-9]{2}\.[0-9]{2}\.[0-9]{4}.*', '', raw_name)
@@ -108,6 +100,9 @@ def parse_jobs_zip(uploaded_file):
                     
                     if "въпросник" in lower_name or "questionnaire" in lower_name:
                         idx = text_content.find("Въпросник")
+                        if idx == -1:
+                            idx = text_content.find("Questionnaire")
+                            
                         if idx != -1: 
                             text_content = text_content[idx:]
                         
@@ -118,8 +113,7 @@ def parse_jobs_zip(uploaded_file):
                     elif "notes" in lower_name or "бележки" in lower_name:
                         cv_data["notes"] = text_content.replace('\n', '  \n')
                         
-                    else:
-                        # V4 Магия: HTML профилът вече е готов и чист Markdown
+                    elif "профил" in lower_name or "profile" in lower_name:
                         html_profile_text = text_content
 
             elif lower_name.endswith(".pdf"):
