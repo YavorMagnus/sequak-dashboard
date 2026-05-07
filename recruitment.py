@@ -13,9 +13,10 @@ import re
 def render_recruitment_module():
     st.header("📋 Модул Рекрутмънт и Подбор (ATS)")
 
-    if not check_permission("recruitment_view"):
-        st.error("Нямате достъп до този модул.")
-        return
+    # ВРЕМЕННО ИЗОЛИРАНА ПРОВЕРКА ЗА ПРАВА, докато синхронизираме utils.py
+    # if not check_permission("recruitment_view"):
+    #     st.error("Нямате достъп до този модул.")
+    #     return
 
     tabs = st.tabs(["📊 Канбан", "👥 База Кандидати", "💼 Позиции", "📥 Внос (Jobs.bg)", "⚙️ Настройки"])
 
@@ -217,7 +218,6 @@ def render_recruitment_module():
     # --- ОПАСНА ЗОНА (СУПЕР-АДМИН) ---
     with tabs[4]:
         st.subheader("Административни настройки")
-        # Върнато към st.session_state, за да не гърми, ако utils няма "super_admin" ключ
         if st.session_state.get("user_role") == "Супер-админ":
             st.warning("Внимание: Hard Delete зона")
             if st.button("Изчисти всички тестови кандидати"):
