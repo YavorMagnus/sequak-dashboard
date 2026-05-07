@@ -7,7 +7,7 @@ import base64
 import fitz  # PyMuPDF
 from bs4 import BeautifulSoup
 import re
-from datetime import datetime
+import docx  # За четене на .docx файлове
 
 # --- КОНФИГУРАЦИЯ ---
 COMPANIES = ["Фирма 1 (Строителство)", "Фирма 2 (Логистика)", "Фирма 3 (Търговия)", "Холдинг Център"]
@@ -34,42 +34,79 @@ def clean_html_text(html_bytes):
     text = text.replace('\n', '  \n')
     return text.strip()
 
+# --- ХАКЕРСКИ ПАРСЪР (MAGIC NUMBERS & WORD) ---
 def parse_jobs_zip(uploaded_file):
     raw_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
     name_no_dates = re.sub(r'_[0-9]{2}\.[0-9]{2}\.[0-9]{4}.*', '', raw_name)
     clean_name = re.sub(r'^[0-9]+_', '', name_no_dates).replace('_', ' ').strip()
     cv_data = {"questionnaire": "Няма прикачен въпросник.", "notes": "Няма намерени бележки.", "cv_text": "Няма намерен текст на CV."}
-    photo_base64, has_pdf_cv, html_profile_text = None, False, ""
+    photo_base64, has_document_cv, html_profile_text = None, False, ""
+    
     with zipfile.ZipFile(uploaded_file, "r") as z:
         for file_name in z.namelist():
             lower_name = file_name.split('/')[-1].lower()
-            if lower_name.endswith((".jpg", ".jpeg", ".png")) and not photo_base64:
-                with z.open(file_name) as f: photo_base64 = base64.b64encode(f.read()).decode("utf-8")
-            elif lower_name.endswith((".html", ".htm")):
-                with z.open(file_name) as f:
-                    text_content = clean_html_text(f.read())
-                    if "въпросник" in lower_name or "questionnaire" in lower_name:
-                        idx = text_content.find("Въпросник")
-                        if idx == -1: idx = text_content.find("Questionnaire")
-                        if idx != -1: text_content = text_content[idx:]
-                        text_content = re.sub(r'\s*(\d+\.\s)', r'\n\n\1', text_content)
-                        text_content = re.sub(r'(\?[*]?)\s+(.*)', r'\1 **\2**', text_content)
-                        cv_data["questionnaire"] = text_content
-                    elif "notes" in lower_name or "бележки" in lower_name: cv_data["notes"] = text_content
-                    elif "профил" in lower_name or "profile" in lower_name: html_profile_text = text_content
-            elif lower_name.endswith(".pdf"):
-                with z.open(file_name) as f:
-                    try:
-                        doc = fitz.open(stream=f.read(), filetype="pdf")
-                        pdf_text = ""
-                        for page in doc:
-                            pdf_text += page.get_text().replace('\n', '  \n') + "\n\n"
-                            if not photo_base64:
-                                imgs = page.get_images(full=True)
-                                if imgs: photo_base64 = base64.b64encode(doc.extract_image(imgs[0][0])["image"]).decode("utf-8")
-                        cv_data["cv_text"] = pdf_text.strip(); has_pdf_cv = True
-                    except: pass
-    if not has_pdf_cv and html_profile_text: cv_data["cv_text"] = html_profile_text
+            if lower_name.endswith(".url") or lower_name in ["jobs.bg", "business.jobs.bg"]: 
+                continue
+                
+            with z.open(file_name) as f:
+                file_bytes = f.read()
+                
+            # ИДЕНТИФИКАЦИЯ ЧРЕЗ МАГИЧЕСКИ БАЙТОВЕ (Заобикаляме липсващи разширения)
+            is_pdf = file_bytes.startswith(b"%PDF") or lower_name.endswith(".pdf")
+            is_docx = lower_name.endswith(".docx")
+            is_doc = lower_name.endswith(".doc")
+            is_html = lower_name.endswith((".html", ".htm")) or b"<html" in file_bytes[:500].lower()
+            is_img = lower_name.endswith((".jpg", ".jpeg", ".png")) or file_bytes.startswith(b"\xFF\xD8\xFF") or file_bytes.startswith(b"\x89PNG")
+            
+            if is_img and not photo_base64:
+                photo_base64 = base64.b64encode(file_bytes).decode("utf-8")
+                
+            elif is_html:
+                text_content = clean_html_text(file_bytes)
+                if "въпросник" in lower_name or "questionnaire" in lower_name:
+                    idx = text_content.find("Въпросник") if text_content.find("Въпросник") != -1 else text_content.find("Questionnaire")
+                    if idx != -1: text_content = text_content[idx:]
+                    text_content = re.sub(r'\s*(\d+\.\s)', r'\n\n\1', text_content)
+                    text_content = re.sub(r'(\?[*]?)\s+(.*)', r'\1 **\2**', text_content)
+                    cv_data["questionnaire"] = text_content
+                elif "notes" in lower_name or "бележки" in lower_name: 
+                    cv_data["notes"] = text_content
+                elif "профил" in lower_name or "profile" in lower_name: 
+                    html_profile_text = text_content
+                    
+            elif is_pdf:
+                try:
+                    doc = fitz.open(stream=file_bytes, filetype="pdf")
+                    pdf_text = ""
+                    for page in doc:
+                        pdf_text += page.get_text().replace('\n', '  \n') + "\n\n"
+                        if not photo_base64:
+                            imgs = page.get_images(full=True)
+                            if imgs: photo_base64 = base64.b64encode(doc.extract_image(imgs[0][0])["image"]).decode("utf-8")
+                    cv_data["cv_text"] = pdf_text.strip()
+                    has_document_cv = True
+                except: pass
+                
+            elif is_docx:
+                try:
+                    doc = docx.Document(io.BytesIO(file_bytes))
+                    cv_data["cv_text"] = "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+                    has_document_cv = True
+                except: pass
+                
+            elif is_doc:
+                # Спасителен пояс за антични .doc файлове (Cyrillic Windows-1251)
+                try:
+                    dec = file_bytes.decode("windows-1251", errors="ignore")
+                    clean_doc = re.sub(r'[^\w\s\.,!?-]', ' ', dec)
+                    cv_data["cv_text"] = re.sub(r'\s+', ' ', clean_doc).strip()
+                    has_document_cv = True
+                except: pass
+
+    # Ако няма намерен PDF/Word, ползваме HTML профила като CV
+    if not has_document_cv and html_profile_text: 
+        cv_data["cv_text"] = html_profile_text
+        
     return clean_name.title(), cv_data, photo_base64
 
 # --- THE MODAL: ИНТЕРАКТИВНО ДОСИЕ ---
@@ -90,12 +127,12 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
     statuses = ["Нов", "Телефонно интервю", "Живо интервю", "Одобрен", "Отхвърлен", "Преместен"]
     with col1: new_status = st.selectbox("Статус", statuses, index=statuses.index(status) if status in statuses else 0, label_visibility="collapsed")
     with col2: 
-        if st.button("💾 Запиши статус", use_container_width=True, help="Променя мястото на кандидата в списъка"):
+        if st.button("💾 Запиши статус", use_container_width=True):
             supabase.table("hr_applications").update({"status": new_status}).eq("id", app_id).execute()
             st.rerun()
-    with col3: st.button("✉️ Сподели", use_container_width=True, help="Изпрати профила по имейл (в процес...)")
+    with col3: st.button("✉️ Сподели", use_container_width=True)
     with col4:
-        if st.button("🗑️ Изтрий", type="primary", use_container_width=True, help="Изтрива досието и всички бележки"):
+        if st.button("🗑️ Изтрий", type="primary", use_container_width=True):
             supabase.table("hr_candidates").delete().eq("id", candidate_id).execute()
             st.rerun()
         
@@ -107,14 +144,12 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
     
     with tabs[1]:
         st.write("### 💬 Вътрешни бележки")
-        # Извличане на съществуващи бележки
         comments_res = supabase.table("hr_comments").select("*").eq("application_id", app_id).order("created_at").execute()
         for comm in (comments_res.data or []):
             with st.chat_message("user"):
                 st.write(f"**{comm['author_name']}** ({comm['created_at'][:16]})")
                 st.write(comm['comment_text'])
         
-        # Добавяне на нова бележка
         with st.form("new_comment", clear_on_submit=True):
             comment_txt = st.text_area("Добави коментар / указание:")
             if st.form_submit_button("Добави бележка"):
@@ -129,15 +164,29 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
     with tabs[2]: st.markdown(cv_dict.get("cv_text", "Няма данни"))
     
     with tabs[3]:
-        st.write("### 📊 Оценка на профила")
+        st.write("### 📊 Оценка на профила (Сбор: 100%)")
         current_scores = manual_score if manual_score else {cat: 0 for cat in SCORE_CATEGORIES}
         new_scores = {}
-        for cat in SCORE_CATEGORIES:
-            new_scores[cat] = st.slider(cat, 0, 100, int(current_scores.get(cat, 0)), step=5, format="%d%%")
+        total_score = 0
         
-        if st.button("💾 Запиши оценка по матрицата"):
+        for cat in SCORE_CATEGORIES:
+            val = st.slider(cat, 0, 100, int(current_scores.get(cat, 0)), step=5, format="%d%%")
+            new_scores[cat] = val
+            total_score += val
+            
+        st.divider()
+        
+        # Логика за сумиране и блокиране
+        if total_score != 100:
+            st.error(f"🚨 **Внимание:** Текущата сума е **{total_score}%**. Моля, разпределете точно 100%, за да запазите.")
+            btn_disabled = True
+        else:
+            st.success("✅ **Перфектно!** Сумата е точно 100%. Можете да запишете оценката.")
+            btn_disabled = False
+            
+        if st.button("💾 Запиши оценка по матрицата", disabled=btn_disabled, use_container_width=True):
             supabase.table("hr_applications").update({"manual_score": new_scores}).eq("id", app_id).execute()
-            st.success("Оценката е запазена!")
+            st.rerun()
 
 # --- ОСНОВЕН РЕНДЕР ---
 def render_recruitment_module():
