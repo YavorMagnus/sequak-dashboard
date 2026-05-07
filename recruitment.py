@@ -16,32 +16,67 @@ COMPANIES = [
     "Холдинг Център"
 ]
 
-# --- УМНО ИЗЧИСТВАНЕ НА HTML (V3) ---
+# --- УМНО ИЗЧИСТВАНЕ НА HTML (V4 - Jobs.bg Native) ---
 def clean_html_text(html_bytes):
     soup = BeautifulSoup(html_bytes.decode("utf-8", errors="ignore"), "html.parser")
     
-    # Премахване на скриптове и стилове
-    for tag in soup(["script", "style", "head", "noscript"]):
+    # 1. Премахване на скриптове и излишни тагове
+    for tag in soup(["script", "style", "head", "noscript", "title"]):
         tag.extract()
+        
+    # 2. Jobs.bg специфично Markdown форматиране
+    # Етикети (напр. Дата на раждане) -> Bold
+    for label in soup.find_all("label"):
+        label.insert_before("**")
+        label.insert_after("**")
+        label.unwrap()
+
+    # Основни секции -> Markdown Заглавие 3
+    for h5 in soup.find_all("h5"):
+        h5.insert_before("\n\n### ")
+        h5.insert_after("\n")
+        h5.unwrap()
+
+    # Заглавия на длъжности -> Bold
+    for h6 in soup.find_all("h6"):
+        h6.insert_before("\n**")
+        h6.insert_after("**\n")
+        h6.unwrap()
+
+    # Дати (overline) -> Курсив
+    for overline in soup.find_all(class_="overline"):
+        overline.insert_before("\n*")
+        overline.insert_after("*\n")
+        overline.unwrap()
+
+    # Списъци с детайли (item) -> Булети
+    for item in soup.find_all(class_="item"):
+        item.insert_before("\n- ")
+        item.insert_after("\n")
+        item.unwrap()
         
     # Смяна на <br> с нови редове
     for br in soup.find_all("br"):
         br.replace_with("\n")
         
-    # Добавяне на нов ред след всеки блоков елемент и табличен ред
-    for block in soup.find_all(["div", "p", "tr", "li", "h1", "h2", "h3"]):
+    # Добавяне на нов ред след всеки блоков елемент
+    for block in soup.find_all(["div", "p", "tr", "li", "h1", "h2", "h3", "h4"]):
         block.insert_after("\n")
         
+    # 3. Извличане и финално изчистване
     text = soup.get_text(separator=' ', strip=True)
     
-    # Изчистване на излишни интервали и нови редове
+    # Фиксиране на празни места около Markdown символите, ако са се появили
+    text = re.sub(r'\*\*\s+(.*?)\s+\*\*', r'**\1**', text)
+    text = re.sub(r'\*\s+(.*?)\s+\*', r'*\1*', text)
+    
     text = re.sub(r'[ \t]+', ' ', text)
     text = re.sub(r'\n\s*\n+', '\n\n', text)
+    
     return text.strip()
 
-# --- УМНИЯТ ПАРСЪР V3 (С Bold Отговори) ---
+# --- УМНИЯТ ПАРСЪР V4 ---
 def parse_jobs_zip(uploaded_file):
-    # Изчистване на Франкенщайн името
     raw_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
     name_no_dates = re.sub(r'_[0-9]{2}\.[0-9]{2}\.[0-9]{4}.*', '', raw_name)
     clean_name = re.sub(r'^[0-9]+_', '', name_no_dates).replace('_', ' ').strip()
@@ -63,12 +98,10 @@ def parse_jobs_zip(uploaded_file):
             if lower_name.endswith(".url") or lower_name in ["jobs.bg", "business.jobs.bg"]: 
                 continue
                 
-            # Търсим самостоятелна картинка (За Любо)
             if lower_name.endswith((".jpg", ".jpeg", ".png")) and not photo_base64:
                 with z.open(file_name) as f:
                     photo_base64 = base64.b64encode(f.read()).decode("utf-8")
             
-            # Четене на HTML
             elif lower_name.endswith((".html", ".htm")):
                 with z.open(file_name) as f:
                     text_content = clean_html_text(f.read())
@@ -78,31 +111,17 @@ def parse_jobs_zip(uploaded_file):
                         if idx != -1: 
                             text_content = text_content[idx:]
                         
-                        # V3 Магия (Твоята идея): 
-                        # 1. Сваляме всеки въпрос на нов ред
                         text_content = re.sub(r'\s*(\d+\.\s)', r'\n\n\1', text_content)
-                        # 2. Удебеляваме отговора (всичко след въпросителния знак до края на реда)
                         text_content = re.sub(r'(\?[*]?)\s+(.*)', r'\1 **\2**', text_content)
-                        
                         cv_data["questionnaire"] = text_content.replace('\n', '  \n')
                         
                     elif "notes" in lower_name or "бележки" in lower_name:
                         cv_data["notes"] = text_content.replace('\n', '  \n')
                         
                     else:
-                        # V3 Магия: Форматиране на HTML профила (Резервното CV на Любо)
-                        idx = text_content.find("Кандидатура в Jobs.bg")
-                        if idx != -1: 
-                            text_content = text_content[idx:]
-                        
-                        # Разкрасяване на ключовите секции с Markdown Headings
-                        sections = ["Професионален опит", "Образование", "Езици", "Умения", "Допълнителна информация", "Контакти"]
-                        for sec in sections:
-                            text_content = text_content.replace(f"{sec}", f"\n\n### {sec}\n")
-                        
-                        html_profile_text = text_content.replace('\n', '  \n')
+                        # V4 Магия: HTML профилът вече е готов и чист Markdown
+                        html_profile_text = text_content
 
-            # Четене на PDF
             elif lower_name.endswith(".pdf"):
                 with z.open(file_name) as f:
                     pdf_bytes = f.read()
@@ -124,6 +143,7 @@ def parse_jobs_zip(uploaded_file):
                     except Exception as e:
                         pass 
 
+    # Ако няма PDF, слагаме перфектно форматирания HTML профил
     if not has_pdf_cv and html_profile_text:
         cv_data["cv_text"] = html_profile_text
         
