@@ -58,7 +58,7 @@ def show_ticket_details(ticket, df_complaints_param):
             st.write(f"**Имейл:** {ticket.get('client_email', '-')}")
             st.write(f"**ЕИК:** {ticket.get('client_eik', '-')}")
         with col2:
-            st.write(f"**Фирма:** {company_name}")
+            st.markdown(f"**Фирма:** {company_name} &nbsp;&nbsp;|&nbsp;&nbsp; **Консултант:** {ticket.get('consultant', '-')}")
             st.write(f"**Договор №:** {ticket.get('contract_number', '-')}")
             st.write(f"**Машина/и:** {ticket.get('machines', '-')}")
             st.write(f"**Аудио запис (номер):** {ticket.get('call_number', '-')}")
@@ -258,6 +258,7 @@ def show_ticket_details(ticket, df_complaints_param):
             sc1.write(f"Имейл: {ticket.get('client_email', '-')}")
             sc1.write(f"ЕИК: {ticket.get('client_eik', '-')}")
             sc2.write(f"Фирма: {company_name}")
+            sc2.write(f"Консултант: {ticket.get('consultant', '-')}")
             sc2.write(f"Договор №: {ticket.get('contract_number', '-')}")
             sc2.write(f"Машина/и: {ticket.get('machines', '-')}")
             sc2.write(f"Аудио запис: {ticket.get('call_number', '-')}")
@@ -311,7 +312,7 @@ def show_ticket_details(ticket, df_complaints_param):
             <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px;">
             <tr style="background-color: #f9f9f9;">
             <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Дата:</b> {ticket.get('event_datetime', '')}</td>
-            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Фирма:</b> {company_name}</td>
+            <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Фирма:</b> {company_name} <br> <span style="color:#666;">(Консултант: {ticket.get('consultant', '-')})</span></td>
             </tr>
             <tr>
             <td style="padding: 8px; border: 1px solid #eeeeee;"><b>Канал:</b> {ticket.get('channel', '')}</td>
@@ -358,7 +359,7 @@ def show_ticket_details(ticket, df_complaints_param):
         st.markdown("<br>", unsafe_allow_html=True)
         
         with st.expander("🔗 Резервен вариант (Ако искате мейл само с прост текст)"):
-            plain_text = f"Здравейте,\n\nСигнал от: {client_name_safe}\nФирма: {company_name}\nТекущ статус: {current_status}\n\n"
+            plain_text = f"Здравейте,\n\nСигнал от: {client_name_safe}\nФирма: {company_name}\nКонсултант: {ticket.get('consultant', '-')}\nТекущ статус: {current_status}\n\n"
             if inc_description: plain_text += f"Описание:\n{ticket.get('description', '')}\n\n"
             plain_text += f"Поздрави,\n{st.session_state.username}"
             subject_encoded = urllib.parse.quote(f"Информация за сигнал от клиент: {client_name_safe}")
@@ -554,7 +555,7 @@ def render_ro_registry():
     
     with tab_list:
         st.markdown("### 🔍 Търсачка и Списък")
-        search_query = st.text_input("Търсене по: Име, Телефон, ЕИК, Имейл, Договор, Машина или Аудио запис", placeholder="Въведете текст и натиснете Enter...", key="global_search").strip()
+        search_query = st.text_input("Търсене по: Име, Телефон, ЕИК, Имейл, Договор, Машина, Аудио запис или Консултант", placeholder="Въведете текст и натиснете Enter...", key="global_search").strip()
         
         if not df_complaints.empty:
             df_to_display = df_complaints.copy()
@@ -562,7 +563,7 @@ def render_ro_registry():
             
             if search_query:
                 q = search_query.lower()
-                search_cols = ['client_name', 'client_phone', 'client_email', 'client_eik', 'contract_number', 'machines', 'call_number']
+                search_cols = ['client_name', 'client_phone', 'client_email', 'client_eik', 'contract_number', 'machines', 'call_number', 'consultant']
                 mask = False
                 for col in search_cols:
                     if col in df_to_display.columns: mask = mask | df_to_display[col].fillna('').astype(str).str.lower().str.contains(q)
@@ -765,7 +766,9 @@ def render_ro_registry():
                 with col9:
                     case_type = st.selectbox("Касае *", ["Наем", "Продажба", "Ремонт", "Друго"])
                     call_number = st.text_input("Номер на разговора (аудио запис)")
-                with col10: machines = st.text_input("Машина/и", max_chars=100)
+                with col10: 
+                    machines = st.text_input("Машина/и", max_chars=100)
+                    consultant_name = st.text_input("Консултант (Имена)", max_chars=100)
                     
                 description = st.text_area("Изложение на проблема *", height=120)
                 st.write("*Полетата със звезда са задължителни.*")
@@ -783,7 +786,7 @@ def render_ro_registry():
                                 "channel": channel, "event_datetime": datetime_str, "company_id": company_id,
                                 "client_name": client_name, "client_phone": client_phone, "client_email": client_email,
                                 "client_type": client_type, "client_eik": client_eik, "contract_number": contract_number,
-                                "case_type": case_type, "call_number": call_number, "machines": machines,
+                                "case_type": case_type, "call_number": call_number, "machines": machines, "consultant": consultant_name,
                                 "client_action_needed": client_action_needed, "description": description,
                                 "current_status": "Чака заключение и препоръка"
                             }
