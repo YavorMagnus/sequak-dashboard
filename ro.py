@@ -173,9 +173,20 @@ def show_ticket_details(ticket, df_complaints_param):
                     else: rec_comment = st.text_input("Коментар към препоръката (незадължително)", max_chars=500, key=f"ic_{ticket['id']}")
                     st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
                     
+                    # ИЗВЛИЧАНЕ НА РЕАЛНИТЕ ПОТРЕБИТЕЛИ ЗА УМНО ВЪЗЛАГАНЕ
+                    try:
+                        sys_users_res = supabase.table("users").select("username").execute()
+                        sys_users = sorted([u['username'] for u in sys_users_res.data])
+                    except:
+                        sys_users = []
+                    
+                    assignee_options = ["Избери..."] + sys_users + ["--- Бизнес Роли ---"] + ROLES_LIST
+                    
                     col_as1, col_as2 = st.columns(2)
-                    with col_as1: assignee = st.selectbox("Възложено на (Роля)", ["Избери..."] + ROLES_LIST, key=f"as_{ticket['id']}")
-                    with col_as2: deadline = st.date_input("Ръчен срок (Край до)", value=None, key=f"dl_{ticket['id']}")
+                    with col_as1: 
+                        assignee = st.selectbox("Възложено на (Потребител или Роля)", assignee_options, key=f"as_{ticket['id']}")
+                    with col_as2: 
+                        deadline = st.date_input("Ръчен срок (Край до)", value=None, key=f"dl_{ticket['id']}")
                     assignee_comment = st.text_input("Указания / Коментар към изпълнителя (незадължително)", max_chars=500, key=f"ac_ass_{ticket['id']}")
                     
                     st.markdown("<br>", unsafe_allow_html=True)
@@ -187,7 +198,7 @@ def show_ticket_details(ticket, df_complaints_param):
                     if save_step:
                         if new_conc == "Избери..." or new_rec == "Избери...": st.error("Моля, изберете Заключение и Препоръка!")
                         elif new_rec == "Проверка (поле)" and not field_details: st.error("Моля, опишете какво ще се проверява.")
-                        elif new_rec != "Проверка (поле)" and assignee == "Избери...": st.error("Моля, изберете на кого възлагате изпълнението (Роля)!")
+                        elif new_rec != "Проверка (поле)" and (assignee == "Избери..." or assignee == "--- Бизнес Роли ---"): st.error("Моля, изберете на кого възлагате изпълнението!")
                         else:
                             next_status = "Чака проверка" if new_rec == "Проверка (поле)" else "Чака приключване"
                             conc_text = f"Заключение: {new_conc}"
@@ -200,7 +211,8 @@ def show_ticket_details(ticket, df_complaints_param):
                                 
                             supabase.table("complaint_history").insert({
                                 "complaint_id": ticket['id'], "action_type": "Назначена стъпка", "action_details": full_details,
-                                "assigned_to": assignee if assignee != "Избери..." else None, "deadline_date": str(deadline) if deadline else None,
+                                "assigned_to": assignee if assignee not in ["Избери...", "--- Бизнес Роли ---"] else None, 
+                                "deadline_date": str(deadline) if deadline else None,
                                 "created_by": st.session_state.username
                             }).execute()
                             supabase.table("complaints").update({"current_status": next_status, "current_deadline": str(deadline) if deadline else None}).eq("id", ticket['id']).execute()
@@ -505,7 +517,39 @@ def render_ro_registry():
         df_complaints = pd.DataFrame()
         df_hist_full = pd.DataFrame()
         latest_hist_dict = {}
-        
+
+    # =========================================================
+    # 🔔 ЦЕНТЪР ЗА ИЗВЕСТИЯ (МОИТЕ ЗАДАЧИ)
+    # =========================================================
+    if not df_complaints.empty and check_permission("ro_registry", "edit_kanban"):
+        my_active_tasks = []
+        for _, row in df_complaints.iterrows():
+            cid = row['id']
+            status = row.get('current_status', '')
+            if status not in TERMINAL_STATUSES:
+                assignee = latest_hist_dict.get(cid, {}).get('assignee', '')
+                if assignee == st.session_state.username:
+                    my_active_tasks.append(row)
+
+        if my_active_tasks:
+            st.markdown(f"""
+            <div style="background-color: #0d2136; border-left: 5px solid #00aaff; padding: 15px; border-radius: 5px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0, 170, 255, 0.1);">
+                <h3 style="color: #00aaff; margin-top: 0; margin-bottom: 5px;">🔔 Имате {len(my_active_tasks)} задачи, възложени лично на Вас!</h3>
+                <p style="color: #ccc; font-size: 0.9em; margin-bottom: 15px;">Следните активни сигнали очакват Вашето действие:</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            for task in my_active_tasks:
+                col_t1, col_t2, col_t3 = st.columns([4, 2, 1])
+                dt_str = pd.to_datetime(task.get('event_datetime')).strftime('%d.%m.%Y') if pd.notna(task.get('event_datetime')) else ""
+                col_t1.markdown(f"👤 **{task.get('client_name')}** | 🏢 {task.get('Фирма')} | 📅 {dt_str}")
+                col_t2.markdown(f"<span style='color: #FFD700;'>{task.get('current_status')}</span>", unsafe_allow_html=True)
+                with col_t3:
+                    if st.button("Отвори", key=f"my_task_btn_{task['id']}", use_container_width=True):
+                        st.session_state.auto_open_ticket_id = task['id']
+                        st.rerun()
+            st.markdown("<br>", unsafe_allow_html=True)
+
     tab_list, tab_kanban, tab_new = st.tabs(["👁️ Птичи поглед (Дашборд)", "📋 Канбан дъска", "➕ Въвеждане на нов сигнал"])
     
     with tab_list:
