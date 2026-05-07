@@ -159,7 +159,6 @@ def render_recruitment_module():
             selected_kanban_pos = st.selectbox("Филтър по позиция", [p["title"] for p in positions_df.data], key="kanban_filter")
             
             try:
-                # ЗАЩИТА: Вече не изискваме колоната requirements в Join заявката, за да не гърми, ако липсва в базата.
                 apps_query = supabase.table("hr_applications").select("*, hr_candidates(full_name, cv_text), hr_positions(title)").limit(100000).execute()
                 
                 if apps_query.data:
@@ -168,6 +167,12 @@ def render_recruitment_module():
                     if 'hr_positions' not in apps_df.columns or 'hr_candidates' not in apps_df.columns:
                         st.error("⚠️ Базата данни е празна или липсват Foreign Keys (релации) между таблиците hr_applications, hr_positions и hr_candidates в Supabase.")
                     else:
+                        # ДЕФАНЗИВНО ПРОГРАМИРАНЕ: Ако колоните липсват, ги създаваме виртуално
+                        if "status" not in apps_df.columns:
+                            apps_df["status"] = "Нов"
+                        if "ai_score" not in apps_df.columns:
+                            apps_df["ai_score"] = None
+
                         apps_df = apps_df[apps_df['hr_positions'].apply(lambda x: x.get('title') == selected_kanban_pos if isinstance(x, dict) else False)]
                         
                         cols = st.columns(4)
@@ -183,18 +188,23 @@ def render_recruitment_module():
                                     cv_text = app.get('hr_candidates', {}).get('cv_text', 'Няма данни') if isinstance(app.get('hr_candidates'), dict) else 'Няма данни'
                                     
                                     with st.expander(f"👤 {cand_name}"):
-                                        st.write(f"ID: {app['id']}")
+                                        st.write(f"ID: {app.get('id', 'N/A')}")
                                         
                                         # Редакция на статус (изисква evaluate права, защото е местене по канбан)
                                         if check_permission("recruitment", "evaluate"):
-                                            new_status = st.selectbox("Промени статус", statuses, index=statuses.index(status), key=f"status_{app['id']}")
-                                            if new_status != status:
+                                            current_status = app.get("status", "Нов")
+                                            # Защита: Ако статусът в базата не е в списъка, слагаме го на "Нов"
+                                            if current_status not in statuses:
+                                                current_status = "Нов"
+                                                
+                                            new_status = st.selectbox("Промени статус", statuses, index=statuses.index(current_status), key=f"status_{app.get('id', i)}")
+                                            if new_status != current_status:
                                                 supabase.table("hr_applications").update({"status": new_status}).eq("id", app["id"]).execute()
                                                 st.rerun()
                                         
                                         # --- AI ОЦЕНКА ---
                                         if check_permission("recruitment", "evaluate"):
-                                            if st.button("✨ Генерирай AI Оценка", key=f"ai_{app['id']}"):
+                                            if st.button("✨ Генерирай AI Оценка", key=f"ai_{app.get('id', i)}"):
                                                 st.info("Връзка с Gemini API... (Подготвяме данните)")
                                                 
                                                 # Извличаме изискванията безопасно от вече заредените позиции
@@ -214,7 +224,7 @@ def render_recruitment_module():
                                         if app.get("ai_score"):
                                             st.info(f"AI Анализ: {app['ai_score']}")
 
-                                        if st.checkbox("Виж извлечено CV", key=f"cv_{app['id']}"):
+                                        if st.checkbox("Виж извлечено CV", key=f"cv_{app.get('id', i)}"):
                                             st.text_area("Текст от CV (структуриран):", value=cv_text, height=300)
                 else:
                     st.info("Няма кандидати за тази позиция.")
