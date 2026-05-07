@@ -6,7 +6,7 @@ import io
 from bs4 import BeautifulSoup
 import PyPDF2
 import re
-import html # НОВО: Вградена библиотека за чистене на &nbsp; и HTML символи
+import html 
 
 # ЗАБЕЛЕЖКА: Gemini API Key трябва да бъде добавен в st.secrets за сигурност
 # import google.generativeai as genai
@@ -75,7 +75,6 @@ def render_recruitment_module():
                     with zipfile.ZipFile(uploaded_file, "r") as z:
                         count = 0
                         for file_name in z.namelist():
-                            # 1. Парсване на HTML файлове
                             if file_name.lower().endswith((".html", ".htm")):
                                 with z.open(file_name) as f:
                                     html_content = f.read().decode("utf-8", errors="ignore")
@@ -88,10 +87,9 @@ def render_recruitment_module():
                                     
                                     raw_text = soup.get_text(separator=' ')
                                     
-                                    # НОВО: Чистене на &nbsp; и други HTML entity-та ПРЕДИ regex-а
+                                    # Чистене по време на внос
                                     clean_text = html.unescape(raw_text)
-                                    clean_text = clean_text.replace('\xa0', ' ') # Застраховка срещу твърди интервали
-                                    
+                                    clean_text = clean_text.replace('\xa0', ' ') 
                                     clean_text = re.sub(r' +', ' ', clean_text)
                                     clean_text = re.sub(r'\n\s*\n', '\n\n', clean_text).strip()
                                     candidate_name = soup.title.string.replace("Jobs.bg - ", "") if soup.title else "Неизвестен"
@@ -117,7 +115,6 @@ def render_recruitment_module():
                                     except Exception as e:
                                         continue
                             
-                            # 2. Парсване на PDF файлове
                             elif file_name.lower().endswith(".pdf"):
                                 with z.open(file_name) as f:
                                     try:
@@ -190,6 +187,10 @@ def render_recruitment_module():
                                     cand_name = app.get('hr_candidates', {}).get('full_name', 'Неизвестен') if isinstance(app.get('hr_candidates'), dict) else 'Неизвестен'
                                     cv_text = app.get('hr_candidates', {}).get('cv_text', 'Няма данни') if isinstance(app.get('hr_candidates'), dict) else 'Няма данни'
                                     
+                                    # НОВО: Чистене на стари и счупени записи в движение (за презентация)
+                                    display_cv_text = cv_text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&quot;", '"')
+                                    display_cv_text = re.sub(r'\n+', '\n\n', display_cv_text) # Оправяме разстоянието между редовете
+                                    
                                     with st.expander(f"👤 {cand_name}"):
                                         # Редакция на статус
                                         if check_permission("recruitment", "evaluate"):
@@ -202,10 +203,12 @@ def render_recruitment_module():
                                                 supabase.table("hr_applications").update({"status": new_status}).eq("id", app["id"]).execute()
                                                 st.rerun()
                                         
-                                        # НОВО: Изскачащ широк прозорец за CV-то
+                                        # НОВО: UX Подобрение. Използваме Markdown за красиво и четимо показване, без грозни кутии.
                                         with st.popover("📄 Прочети оригинално CV", use_container_width=True):
-                                            st.markdown(f"**Оригинално CV на {cand_name}**")
-                                            st.text_area("Текст:", value=cv_text, height=400, disabled=True, label_visibility="collapsed")
+                                            st.markdown(f"### Оригинално CV на {cand_name}")
+                                            st.markdown("---")
+                                            # Извеждаме изчистения текст като цитат за по-добра четимост
+                                            st.info(display_cv_text)
                                         
                                         # --- AI ОЦЕНКА И ПРЕВОД ---
                                         if check_permission("recruitment", "evaluate"):
@@ -218,7 +221,7 @@ def render_recruitment_module():
                                                         req_text = p.get("requirements", "Няма въведени изисквания")
                                                         break
                                                 
-                                                # ТУК ще сложим реалния код за Gemini, който ще върне преведен анализ
+                                                # ТУК ще сложим реалния код за Gemini
                                                 mock_ai = f"**🤖 AI Резюме (на Български):**\nКандидатът има нужния опит, но му липсват специфични технически умения. Оценка: 7/10."
                                                 
                                                 supabase.table("hr_applications").update({"ai_score": mock_ai}).eq("id", app["id"]).execute()
@@ -226,7 +229,7 @@ def render_recruitment_module():
                                                 st.rerun()
 
                                         if app.get("ai_score"):
-                                            st.info(app['ai_score'])
+                                            st.success(app['ai_score'])
 
                 else:
                     st.info("Няма кандидати за тази позиция.")
