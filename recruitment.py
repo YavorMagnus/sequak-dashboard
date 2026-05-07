@@ -87,7 +87,7 @@ def render_recruitment_module():
                                     
                                     raw_text = soup.get_text(separator=' ')
                                     
-                                    # Чистене по време на внос
+                                    # Чистене по време на внос (Правилната логика)
                                     clean_text = html.unescape(raw_text)
                                     clean_text = clean_text.replace('\xa0', ' ') 
                                     clean_text = re.sub(r' +', ' ', clean_text)
@@ -187,9 +187,8 @@ def render_recruitment_module():
                                     cand_name = app.get('hr_candidates', {}).get('full_name', 'Неизвестен') if isinstance(app.get('hr_candidates'), dict) else 'Неизвестен'
                                     cv_text = app.get('hr_candidates', {}).get('cv_text', 'Няма данни') if isinstance(app.get('hr_candidates'), dict) else 'Няма данни'
                                     
-                                    # НОВО: Чистене на стари и счупени записи в движение (за презентация)
-                                    display_cv_text = cv_text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&quot;", '"')
-                                    display_cv_text = re.sub(r'\n+', '\n\n', display_cv_text) # Оправяме разстоянието между редовете
+                                    # Подготовка за Markdown (уважава новите редове)
+                                    formatted_cv = cv_text.replace('\n', '  \n')
                                     
                                     with st.expander(f"👤 {cand_name}"):
                                         # Редакция на статус
@@ -203,12 +202,11 @@ def render_recruitment_module():
                                                 supabase.table("hr_applications").update({"status": new_status}).eq("id", app["id"]).execute()
                                                 st.rerun()
                                         
-                                        # НОВО: UX Подобрение. Използваме Markdown за красиво и четимо показване, без грозни кутии.
+                                        # Изскачащ широк прозорец за CV-то с чист текст
                                         with st.popover("📄 Прочети оригинално CV", use_container_width=True):
                                             st.markdown(f"### Оригинално CV на {cand_name}")
                                             st.markdown("---")
-                                            # Извеждаме изчистения текст като цитат за по-добра четимост
-                                            st.info(display_cv_text)
+                                            st.markdown(formatted_cv)
                                         
                                         # --- AI ОЦЕНКА И ПРЕВОД ---
                                         if check_permission("recruitment", "evaluate"):
@@ -256,9 +254,23 @@ def render_recruitment_module():
     with tabs[4]:
         st.subheader("Административни настройки")
         if st.session_state.get("user_role") == "Супер-админ":
-            st.warning("Внимание: Hard Delete зона")
-            if st.button("Изчисти всички тестови кандидати"):
-                st.error("Функцията е деактивирана за сигурност. Свържете се с CTO.")
+            st.warning("Внимание: Всички записи ще бъдат изтрити безвъзвратно!")
+            if st.button("Изчисти всички тестови кандидати (Hard Delete)"):
+                with st.spinner("Изтриване на данни..."):
+                    # Първо трием апликациите (заради релациите)
+                    apps = supabase.table("hr_applications").select("id").limit(100000).execute()
+                    if apps.data:
+                        for a in apps.data:
+                            supabase.table("hr_applications").delete().eq("id", a["id"]).execute()
+                            
+                    # После трием самите кандидати
+                    cands = supabase.table("hr_candidates").select("id").limit(100000).execute()
+                    if cands.data:
+                        for c in cands.data:
+                            supabase.table("hr_candidates").delete().eq("id", c["id"]).execute()
+                            
+                st.success("Базата е напълно изчистена! Можете да внесете ZIP архива наново.")
+                st.rerun()
         else:
             st.info("Само за Супер-админ")
 
