@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 import PyPDF2
 import re
 import html 
-import docx # НОВО: Библиотека за четене на Word документи
+import docx
 
 # ЗАБЕЛЕЖКА: Gemini API Key трябва да бъде добавен в st.secrets за сигурност
 # import google.generativeai as genai
@@ -66,7 +66,6 @@ def render_recruitment_module():
                 [p["title"] for p in positions_df.data] if has_positions else ["Няма активни позиции"]
             )
             
-            # Позволяваме много файлове едновременно
             uploaded_files = st.file_uploader("Качи ZIP архив/и", type="zip", accept_multiple_files=True)
 
             if uploaded_files and st.button("Стартирай импорт"):
@@ -85,6 +84,10 @@ def render_recruitment_module():
                                         candidate_name = "Неизвестен"
                                         source_type = ""
                                         
+                                        # ФИЛТЪР ЗА БОКЛУК: Прескачаме системни файлове от Jobs.bg
+                                        if file_name.lower().strip() in ["jobs.bg", "business.jobs.bg", "jobs.bg.html", "business.jobs.bg.html"]:
+                                            continue
+
                                         # 1. Парсване на HTML
                                         if file_name.lower().endswith((".html", ".htm")):
                                             with z.open(file_name) as f:
@@ -98,7 +101,13 @@ def render_recruitment_module():
                                                 
                                                 raw_text = soup.get_text(separator=' ')
                                                 clean_text = html.unescape(raw_text).replace('\xa0', ' ')
-                                                candidate_name = soup.title.string.replace("Jobs.bg - ", "") if soup.title else "Неизвестен"
+                                                
+                                                # Вадим името и филтрираме системните заглавия
+                                                extracted_name = soup.title.string.replace("Jobs.bg - ", "").strip() if soup.title else "Неизвестен"
+                                                if extracted_name.lower() in ["jobs.bg", "business.jobs.bg"]:
+                                                    continue
+                                                    
+                                                candidate_name = extracted_name
                                                 source_type = "Jobs.bg HTML"
                                                 
                                         # 2. Парсване на PDF
@@ -124,24 +133,23 @@ def render_recruitment_module():
                                                 candidate_name = file_name.split('/')[-1].replace(".docx", "").replace(".DOCX", "")
                                                 source_type = "Jobs.bg DOCX"
                                                 
-                                        # 4. Блокиране на стар формат (.doc) с ясно съобщение
+                                        # 4. Блокиране на стар формат (.doc)
                                         elif file_name.lower().endswith(".doc"):
                                             errors_log.append(f"⚠️ {file_name}: Форматът '.doc' е остарял. Моля, запазете като PDF или DOCX.")
                                             continue
                                             
-                                        # ЗАЩИТА ПРЕДИ БАЗАТА: Ако текстът е извлечен успешно, го чистим финално и записваме
+                                        # ЗАЩИТА ПРЕДИ БАЗАТА
                                         if clean_text:
                                             clean_text = re.sub(r' +', ' ', clean_text)
                                             clean_text = re.sub(r'\n\s*\n', '\n\n', clean_text).strip()
                                             
-                                            if len(clean_text) > 10: # Проверка дали не е празен файл
+                                            if len(clean_text) > 10: 
                                                 try:
                                                     candidate_data = {
                                                         "full_name": candidate_name,
                                                         "cv_text": clean_text,
                                                         "source": source_type
                                                     }
-                                                    # Upsert за дедубликация
                                                     res = supabase.table("hr_candidates").upsert(candidate_data, on_conflict="full_name").execute()
                                                     
                                                     if res.data:
