@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 import PyPDF2
 import re
 import html 
+import docx # НОВО: Библиотека за четене на Word документи
 
 # ЗАБЕЛЕЖКА: Gemini API Key трябва да бъде добавен в st.secrets за сигурност
 # import google.generativeai as genai
@@ -14,14 +15,13 @@ import html
 def render_recruitment_module():
     st.header("📋 Модул Рекрутмънт и Подбор (ATS)")
 
-    # Проверка на правата
     if not check_permission("recruitment", "read"):
         st.error("Нямате достъп до този модул.")
         return
 
     tabs = st.tabs(["📊 Канбан", "👥 База Кандидати", "💼 Позиции", "📥 Внос (Jobs.bg)", "⚙️ Настройки"])
 
-    # --- ИЗВЛИЧАНЕ НА ПОЗИЦИИТЕ ГЛОБАЛНО (Нужни са за Канбан и Внос) ---
+    # --- ИЗВЛИЧАНЕ НА ПОЗИЦИИТЕ ГЛОБАЛНО ---
     try:
         positions_df = supabase.table("hr_positions").select("*").limit(100000).execute()
         has_positions = bool(positions_df.data)
@@ -45,7 +45,7 @@ def render_recruitment_module():
                         st.success("Позицията е създадена!")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Грешка при запис (Проверете дали имате колона 'requirements' в Supabase): {e}")
+                        st.error(f"Грешка при запис в Supabase: {e}")
         else:
             st.info("Нямате права за създаване на нови позиции. Режим на четене.")
 
@@ -66,90 +66,112 @@ def render_recruitment_module():
                 [p["title"] for p in positions_df.data] if has_positions else ["Няма активни позиции"]
             )
             
-            uploaded_file = st.file_uploader("Качи ZIP архив", type="zip")
+            # Позволяваме много файлове едновременно
+            uploaded_files = st.file_uploader("Качи ZIP архив/и", type="zip", accept_multiple_files=True)
 
-            if uploaded_file and st.button("Стартирай импорт"):
+            if uploaded_files and st.button("Стартирай импорт"):
                 if not has_positions:
-                    st.warning("Моля, първо създайте позиция в таб 'Позиции', към която да прикачите кандидатите.")
+                    st.warning("Моля, първо създайте позиция в таб 'Позиции'.")
                 else:
-                    with zipfile.ZipFile(uploaded_file, "r") as z:
-                        count = 0
-                        for file_name in z.namelist():
-                            if file_name.lower().endswith((".html", ".htm")):
-                                with z.open(file_name) as f:
-                                    html_content = f.read().decode("utf-8", errors="ignore")
-                                    soup = BeautifulSoup(html_content, "html.parser")
-                                    
-                                    for br in soup.find_all("br"):
-                                        br.replace_with("\n")
-                                    for p in soup.find_all(["p", "div", "tr"]):
-                                        p.append("\n")
-                                    
-                                    raw_text = soup.get_text(separator=' ')
-                                    
-                                    # Чистене по време на внос (Правилната логика)
-                                    clean_text = html.unescape(raw_text)
-                                    clean_text = clean_text.replace('\xa0', ' ') 
-                                    clean_text = re.sub(r' +', ' ', clean_text)
-                                    clean_text = re.sub(r'\n\s*\n', '\n\n', clean_text).strip()
-                                    candidate_name = soup.title.string.replace("Jobs.bg - ", "") if soup.title else "Неизвестен"
-                                    
-                                    try:
-                                        candidate_data = {
-                                            "full_name": candidate_name,
-                                            "cv_text": clean_text,
-                                            "source": "Jobs.bg HTML"
-                                        }
-                                        res = supabase.table("hr_candidates").upsert(candidate_data, on_conflict="full_name").execute()
+                    count = 0
+                    errors_log = [] 
+                    
+                    with st.spinner("Интелигентен парсинг и проверка на файловете..."):
+                        for uploaded_file in uploaded_files:
+                            try:
+                                with zipfile.ZipFile(uploaded_file, "r") as z:
+                                    for file_name in z.namelist():
+                                        clean_text = ""
+                                        candidate_name = "Неизвестен"
+                                        source_type = ""
                                         
-                                        if res.data:
-                                            cand_id = res.data[0]["id"]
-                                            pos_id_data = supabase.table("hr_positions").select("id").eq("title", target_pos).execute()
-                                            if pos_id_data.data:
-                                                supabase.table("hr_applications").insert({
-                                                    "candidate_id": cand_id,
-                                                    "position_id": pos_id_data.data[0]["id"],
-                                                    "status": "Нов"
-                                                }).execute()
-                                        count += 1
-                                    except Exception as e:
-                                        continue
-                            
-                            elif file_name.lower().endswith(".pdf"):
-                                with z.open(file_name) as f:
-                                    try:
-                                        pdf_reader = PyPDF2.PdfReader(f)
-                                        raw_text = ""
-                                        for page in pdf_reader.pages:
-                                            extracted = page.extract_text()
-                                            if extracted:
-                                                raw_text += extracted + "\n"
-                                        
-                                        clean_text = re.sub(r' +', ' ', raw_text)
-                                        clean_text = re.sub(r'\n\s*\n', '\n\n', clean_text).strip()
-                                        candidate_name = file_name.split('/')[-1].replace(".pdf", "").replace(".PDF", "")
-                                        
-                                        candidate_data = {
-                                            "full_name": candidate_name,
-                                            "cv_text": clean_text,
-                                            "source": "Jobs.bg PDF"
-                                        }
-                                        res = supabase.table("hr_candidates").upsert(candidate_data, on_conflict="full_name").execute()
-                                        
-                                        if res.data:
-                                            cand_id = res.data[0]["id"]
-                                            pos_id_data = supabase.table("hr_positions").select("id").eq("title", target_pos).execute()
-                                            if pos_id_data.data:
-                                                supabase.table("hr_applications").insert({
-                                                    "candidate_id": cand_id,
-                                                    "position_id": pos_id_data.data[0]["id"],
-                                                    "status": "Нов"
-                                                }).execute()
-                                        count += 1
-                                    except Exception as e:
-                                        continue
+                                        # 1. Парсване на HTML
+                                        if file_name.lower().endswith((".html", ".htm")):
+                                            with z.open(file_name) as f:
+                                                html_content = f.read().decode("utf-8", errors="ignore")
+                                                soup = BeautifulSoup(html_content, "html.parser")
+                                                
+                                                for br in soup.find_all("br"):
+                                                    br.replace_with("\n")
+                                                for p in soup.find_all(["p", "div", "tr"]):
+                                                    p.append("\n")
+                                                
+                                                raw_text = soup.get_text(separator=' ')
+                                                clean_text = html.unescape(raw_text).replace('\xa0', ' ')
+                                                candidate_name = soup.title.string.replace("Jobs.bg - ", "") if soup.title else "Неизвестен"
+                                                source_type = "Jobs.bg HTML"
+                                                
+                                        # 2. Парсване на PDF
+                                        elif file_name.lower().endswith(".pdf"):
+                                            with z.open(file_name) as f:
+                                                pdf_reader = PyPDF2.PdfReader(f)
+                                                raw_text = ""
+                                                for page in pdf_reader.pages:
+                                                    extracted = page.extract_text()
+                                                    if extracted:
+                                                        raw_text += extracted + "\n"
+                                                clean_text = raw_text
+                                                candidate_name = file_name.split('/')[-1].replace(".pdf", "").replace(".PDF", "")
+                                                source_type = "Jobs.bg PDF"
+                                                
+                                        # 3. Парсване на Word (.docx)
+                                        elif file_name.lower().endswith(".docx"):
+                                            with z.open(file_name) as f:
+                                                file_stream = io.BytesIO(f.read())
+                                                doc = docx.Document(file_stream)
+                                                raw_text = "\n".join([para.text for para in doc.paragraphs])
+                                                clean_text = raw_text
+                                                candidate_name = file_name.split('/')[-1].replace(".docx", "").replace(".DOCX", "")
+                                                source_type = "Jobs.bg DOCX"
+                                                
+                                        # 4. Блокиране на стар формат (.doc) с ясно съобщение
+                                        elif file_name.lower().endswith(".doc"):
+                                            errors_log.append(f"⚠️ {file_name}: Форматът '.doc' е остарял. Моля, запазете като PDF или DOCX.")
+                                            continue
+                                            
+                                        # ЗАЩИТА ПРЕДИ БАЗАТА: Ако текстът е извлечен успешно, го чистим финално и записваме
+                                        if clean_text:
+                                            clean_text = re.sub(r' +', ' ', clean_text)
+                                            clean_text = re.sub(r'\n\s*\n', '\n\n', clean_text).strip()
+                                            
+                                            if len(clean_text) > 10: # Проверка дали не е празен файл
+                                                try:
+                                                    candidate_data = {
+                                                        "full_name": candidate_name,
+                                                        "cv_text": clean_text,
+                                                        "source": source_type
+                                                    }
+                                                    # Upsert за дедубликация
+                                                    res = supabase.table("hr_candidates").upsert(candidate_data, on_conflict="full_name").execute()
+                                                    
+                                                    if res.data:
+                                                        cand_id = res.data[0]["id"]
+                                                        pos_id_data = supabase.table("hr_positions").select("id").eq("title", target_pos).execute()
+                                                        if pos_id_data.data:
+                                                            supabase.table("hr_applications").insert({
+                                                                "candidate_id": cand_id,
+                                                                "position_id": pos_id_data.data[0]["id"],
+                                                                "status": "Нов"
+                                                            }).execute()
+                                                    count += 1
+                                                except Exception as db_err:
+                                                    errors_log.append(f"❌ Грешка в базата за {candidate_name}: {db_err}")
+                                            else:
+                                                errors_log.append(f"⚠️ {file_name}: Файлът изглежда празен или текстът не може да бъде разчетен.")
 
-                        st.success(f"Успешно обработени {count} кандидати!")
+                            except Exception as zip_err:
+                                errors_log.append(f"❌ Грешка при отваряне на архив {uploaded_file.name}: {zip_err}")
+
+                    # Финален репорт
+                    if count > 0:
+                        st.success(f"🎉 Успешно проверени и обработени {count} кандидати!")
+                    else:
+                        st.warning("⚠️ Не бяха импортирани кандидати. Проверете детайлите по-долу.")
+                        
+                    if errors_log:
+                        with st.expander("Виж детайли за отхвърлените файлове / грешките"):
+                            for err in errors_log:
+                                st.write(err)
         else:
             st.info("Нямате права за внос на кандидати.")
 
@@ -187,11 +209,9 @@ def render_recruitment_module():
                                     cand_name = app.get('hr_candidates', {}).get('full_name', 'Неизвестен') if isinstance(app.get('hr_candidates'), dict) else 'Неизвестен'
                                     cv_text = app.get('hr_candidates', {}).get('cv_text', 'Няма данни') if isinstance(app.get('hr_candidates'), dict) else 'Няма данни'
                                     
-                                    # Подготовка за Markdown (уважава новите редове)
                                     formatted_cv = cv_text.replace('\n', '  \n')
                                     
                                     with st.expander(f"👤 {cand_name}"):
-                                        # Редакция на статус
                                         if check_permission("recruitment", "evaluate"):
                                             current_status = app.get("status", "Нов")
                                             if current_status not in statuses:
@@ -202,26 +222,15 @@ def render_recruitment_module():
                                                 supabase.table("hr_applications").update({"status": new_status}).eq("id", app["id"]).execute()
                                                 st.rerun()
                                         
-                                        # Изскачащ широк прозорец за CV-то с чист текст
                                         with st.popover("📄 Прочети оригинално CV", use_container_width=True):
                                             st.markdown(f"### Оригинално CV на {cand_name}")
                                             st.markdown("---")
                                             st.markdown(formatted_cv)
                                         
-                                        # --- AI ОЦЕНКА И ПРЕВОД ---
                                         if check_permission("recruitment", "evaluate"):
                                             if st.button("✨ AI Анализ и БГ Превод", key=f"ai_{app.get('id', i)}", use_container_width=True):
                                                 st.info("Връзка с Gemini API... (Очакваме интеграция)")
-                                                
-                                                req_text = "Няма въведени изисквания"
-                                                for p in positions_df.data:
-                                                    if p.get("title") == selected_kanban_pos:
-                                                        req_text = p.get("requirements", "Няма въведени изисквания")
-                                                        break
-                                                
-                                                # ТУК ще сложим реалния код за Gemini
                                                 mock_ai = f"**🤖 AI Резюме (на Български):**\nКандидатът има нужния опит, но му липсват специфични технически умения. Оценка: 7/10."
-                                                
                                                 supabase.table("hr_applications").update({"ai_score": mock_ai}).eq("id", app["id"]).execute()
                                                 st.success("Анализът е готов!")
                                                 st.rerun()
@@ -257,13 +266,11 @@ def render_recruitment_module():
             st.warning("Внимание: Всички записи ще бъдат изтрити безвъзвратно!")
             if st.button("Изчисти всички тестови кандидати (Hard Delete)"):
                 with st.spinner("Изтриване на данни..."):
-                    # Първо трием апликациите (заради релациите)
                     apps = supabase.table("hr_applications").select("id").limit(100000).execute()
                     if apps.data:
                         for a in apps.data:
                             supabase.table("hr_applications").delete().eq("id", a["id"]).execute()
                             
-                    # После трием самите кандидати
                     cands = supabase.table("hr_candidates").select("id").limit(100000).execute()
                     if cands.data:
                         for c in cands.data:
