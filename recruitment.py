@@ -110,7 +110,7 @@ def open_schedule_export(apps_data):
 # --- THE MODAL: ИНТЕРАКТИВНО ДОСИЕ (V19) ---
 @st.dialog("📄 Картон на кандидата", width="large")
 def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_data, photo_base64, manual_score, all_global_positions, current_pos_id, created_at, interview_details):
-    comments_res = supabase.table("hr_comments").select("*").eq("application_id", app_id).order("created_at", desc=True).execute()
+    comments_res = supabase.table("hr_comments").select("*").eq("application_id", app_id).order("created_at").execute().select("*").eq("application_id", app_id).order("created_at", desc=True).execute()
     comments = comments_res.data or []
     
     col_img, col_info = st.columns([1, 4])
