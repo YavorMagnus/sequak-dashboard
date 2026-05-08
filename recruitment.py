@@ -34,7 +34,7 @@ def clean_html_text(html_bytes):
     text = text.replace('\n', '  \n')
     return text.strip()
 
-# --- ХАКЕРСКИ ПАРСЪР ---
+# --- ХАКЕРСКИ ПАРСЪР (V15 - АБСОЛЮТЕН БЛОК ЗА СЛУЖЕБНИ ФАЙЛОВЕ) ---
 def parse_jobs_zip(uploaded_file):
     raw_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
     name_no_dates = re.sub(r'_[0-9]{2}\.[0-9]{2}\.[0-9]{4}.*', '', raw_name)
@@ -67,17 +67,27 @@ def parse_jobs_zip(uploaded_file):
                 
             elif is_html:
                 html_str = file_bytes.decode("utf-8", errors="ignore")
-                if "Въпросник" in html_str or "Questionnaire" in html_str or "questionnaire" in lower_name:
+                
+                # 0. ГЛОБАЛЕН БЛОК: Ако това е служебният файл на Jobs.bg, го изхвърляме веднага!
+                if "Кандидатура в Jobs.bg" in html_str or "Application in Jobs.bg" in html_str:
+                    continue
+                
+                # 1. Търсим Истинския Профил
+                if "cv-preview" in html_str:
+                    html_profile_text = clean_html_text(file_bytes)
+                    
+                # 2. Търсим Въпросник
+                elif "Въпросник" in html_str or "Questionnaire" in html_str or "questionnaire" in lower_name:
                     text_content = clean_html_text(file_bytes)
                     idx = text_content.find("Въпросник") if text_content.find("Въпросник") != -1 else text_content.find("Questionnaire")
                     if idx != -1: text_content = text_content[idx:]
                     text_content = re.sub(r'\s*(\d+\.\s)', r'\n\n\1', text_content)
                     text_content = re.sub(r'(\?[*]?)\s+(.*)', r'\1 **\2**', text_content)
                     cv_data["questionnaire"] = text_content.replace('\n', '  \n')
+                    
+                # 3. Търсим Бележки
                 elif "Бележки" in html_str or "Notes" in html_str or "notes" in lower_name: 
                     cv_data["notes"] = clean_html_text(file_bytes)
-                elif "cv-preview" in html_str and "Кандидатура в Jobs.bg" not in html_str and "Application in Jobs.bg" not in html_str:
-                    html_profile_text = clean_html_text(file_bytes)
                     
             elif is_pdf:
                 try:
@@ -135,7 +145,7 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
     candidate_reason = None
     move_to_pos_id = None
     
-    # Динамично разтваряне на интерфейса за допълнителна информация
+    # Динамично разтваряне на интерфейса
     if new_status in ["Отхвърлен", "Отказал", "Преместен"]:
         st.markdown("<div style='padding: 10px; border-left: 3px solid #ff4b4b; background-color: rgba(255, 75, 75, 0.1); margin-bottom: 15px;'>", unsafe_allow_html=True)
         
@@ -162,18 +172,14 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
             user_name = st.session_state.get("user_name", "Y.Nikolov")
             
             if new_status == "Преместен" and move_to_pos_id:
-                # Вземаме информацията за "преди"
                 curr_title = next(p["title"] for p in all_global_positions if p["id"] == current_pos_id)
                 curr_company = next(p["company_name"] for p in all_global_positions if p["id"] == current_pos_id)
                 
-                # Преместване
                 supabase.table("hr_applications").update({"position_id": move_to_pos_id, "status": "Нов"}).eq("id", app_id).execute()
                 
-                # ПЕРФЕКТНИЯТ AUDIT TRAIL:
                 audit_msg = f"🔄 Преместен от {user_name}. Източник: кампания '{curr_title}' ({curr_company})"
                 supabase.table("hr_comments").insert({"application_id": app_id, "author_name": "🤖 Система", "comment_text": audit_msg}).execute()
             else:
-                # Нормална смяна
                 supabase.table("hr_applications").update({"status": new_status}).eq("id", app_id).execute()
                 
                 reason_text = ""
