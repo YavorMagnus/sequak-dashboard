@@ -8,6 +8,7 @@ import fitz  # PyMuPDF
 from bs4 import BeautifulSoup
 import re
 import docx
+import time
 
 # --- КОНФИГУРАЦИЯ ---
 COMPANIES = ["REN", "CIM", "MAS", "BAU", "AST", "CMX", "RXS", "SNW", "RXB", "DXM"]
@@ -34,7 +35,7 @@ def clean_html_text(html_bytes):
     text = text.replace('\n', '  \n')
     return text.strip()
 
-# --- ХАКЕРСКИ ПАРСЪР (V15 - ЗАМРАЗЕН И НЕПОКЪТНАТ!) ---
+# --- ХАКЕРСКИ ПАРСЪР (V15 - ЗАМРАЗЕН!) ---
 def parse_jobs_zip(uploaded_file):
     raw_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
     name_no_dates = re.sub(r'_[0-9]{2}\.[0-9]{2}\.[0-9]{4}.*', '', raw_name)
@@ -113,7 +114,6 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
     comments_res = supabase.table("hr_comments").select("*").eq("application_id", app_id).order("created_at").execute()
     comments = comments_res.data or []
     
-    # ЗАКЛЮЧВАНЕ НА КАРТОНА, АКО Е ПРЕМЕСТЕН (Ghost Record)
     is_ghost_record = (status == "Преместен")
     
     col_img, col_info = st.columns([1, 4])
@@ -132,7 +132,6 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
     if is_ghost_record:
         st.error("🔒 **Този кандидат е преместен в друга кампания.** Този картон е запазен само за историческа справка и не може да бъде редактиран тук.")
     else:
-        # --- ACTION PANEL ---
         col1, col2, col3, col4 = st.columns(4)
         statuses = ["Нов", "Телефонно интервю", "Живо интервю", "Одобрен", "Отхвърлен", "Отказал", "Преместен"]
         with col1: 
@@ -168,20 +167,16 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
                     curr_title = next(p["title"] for p in all_global_positions if p["id"] == current_pos_id)
                     curr_company = next(p["company_name"] for p in all_global_positions if p["id"] == current_pos_id)
                     
-                    # СТЪПКА 1: Променяме статуса на ТЕКУЩАТА апликация на "Преместен" (Остава като Ghost)
                     supabase.table("hr_applications").update({"status": "Преместен"}).eq("id", app_id).execute()
                     msg_old = f"🔄 Преместен към друга кампания от {user_name}."
                     supabase.table("hr_comments").insert({"application_id": app_id, "author_name": "🤖 Система", "comment_text": msg_old}).execute()
                     
-                    # СТЪПКА 2: Създаваме НОВА апликация в целевата кампания
                     new_app = supabase.table("hr_applications").insert({"candidate_id": candidate_id, "position_id": move_to_pos_id, "status": "Нов"}).execute()
-                    
                     if new_app.data:
                         new_app_id = new_app.data[0]["id"]
                         msg_new = f"🔄 Преместен тук от {user_name}. Източник: '{curr_title}' ({curr_company})"
                         supabase.table("hr_comments").insert({"application_id": new_app_id, "author_name": "🤖 Система", "comment_text": msg_new}).execute()
                 else:
-                    # Нормален статус ъпдейт
                     supabase.table("hr_applications").update({"status": current_sel}).eq("id", app_id).execute()
                     if reject_reason:
                         msg = f"🛑 {current_sel} от {user_name}. Причина: {reject_reason}"
@@ -285,16 +280,66 @@ def render_recruitment_module():
     selected_pos_title = st.selectbox("Кампания:", [p["title"] for p in current_company_positions])
     target_pos_id = next(p["id"] for p in current_company_positions if p["title"] == selected_pos_title)
 
-    # ВЪРНАТ Е ФОРМУЛЯРЪТ ЗА КАЧВАНЕ НА КАНДИДАТИ!
+    # --- ЗОНА ЗА МАСОВО ИЗТРИВАНЕ (Bulk Delete) ---
+    if check_permission("recruitment", "manage_positions"):
+        with st.expander("⚙️ Управление на обявата", expanded=False):
+            st.warning("Внимание: Действието по-долу ще изтрие безвъзвратно всички кандидати и историята им в тази обява!")
+            if st.button("🚨 Изтрий ВСИЧКИ кандидати тук", type="primary"):
+                apps_to_del = supabase.table("hr_applications").select("candidate_id").eq("position_id", target_pos_id).execute().data
+                if apps_to_del:
+                    for a in apps_to_del:
+                        supabase.table("hr_candidates").delete().eq("id", a["candidate_id"]).execute()
+                    st.success("Всички кандидати са изтрити.")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.info("Обявата вече е празна.")
+
+    # --- ИМПОРТ НА КАНДИДАТИ (С ВАЛИДАЦИЯ И ПРОГРЕС) ---
     if check_permission("recruitment", "upload_candidates"):
         with st.expander(f"📥 Импорт към '{selected_pos_title}'"):
             files = st.file_uploader("ZIP архиви", type="zip", accept_multiple_files=True)
             if files and st.button("Старт импорт"):
-                with st.spinner("Обработка..."):
-                    for f in files:
+                total = len(files)
+                progress_bar = st.progress(0)
+                status_txt = st.empty()
+                success_count = 0
+                failed_files = []
+
+                for idx, f in enumerate(files):
+                    status_txt.text(f"Обработка на файл {idx+1} от {total}...")
+                    try:
                         name, data, photo = parse_jobs_zip(f)
+                        
+                        # САНИТАРЕН ФИЛТЪР 1: Изчистване на Null Bytes
+                        for k, v in data.items():
+                            if isinstance(v, str): data[k] = v.replace('\x00', '')
+                                
+                        # САНИТАРЕН ФИЛТЪР 2: Защита от гигантски снимки (над ~2MB Base64)
+                        if photo and len(photo) > 2500000: photo = None
+                            
+                        # ЗАПИС В БАЗАТА
                         c = supabase.table("hr_candidates").insert({"full_name": name, "raw_cv_data": data, "photo_thumbnail": photo}).execute()
-                        if c.data: supabase.table("hr_applications").insert({"candidate_id": c.data[0]["id"], "position_id": target_pos_id}).execute()
+                        if c.data:
+                            supabase.table("hr_applications").insert({"candidate_id": c.data[0]["id"], "position_id": target_pos_id, "status": "Нов"}).execute()
+                            success_count += 1
+                    except Exception as e:
+                        # АМОРТИСЬОР ЗА ГРЕШКИ
+                        failed_files.append((f.name, str(e)))
+                    
+                    progress_bar.progress(int(((idx + 1) / total) * 100))
+                
+                status_txt.empty()
+                progress_bar.empty()
+                
+                if failed_files:
+                    st.error(f"⚠️ {success_count} успешно качени. {len(failed_files)} неуспешни.")
+                    for fname, err in failed_files:
+                        st.warning(f"❌ {fname}: Базата отказа запис.")
+                    if st.button("🔄 Продължи и опресни"): st.rerun()
+                else:
+                    st.success(f"✅ Всички {success_count} кандидати бяха качени успешно!")
+                    time.sleep(1.5)
                     st.rerun()
 
     st.divider()
@@ -302,7 +347,6 @@ def render_recruitment_module():
     with col_f1:
         status_filter = st.pills("Филтър:", ["Всички", "Нов", "Телефонно интервю", "Живо интервю", "Одобрен", "Отхвърлен", "Отказал", "Преместен"], default="Всички")
     with col_f2:
-        # ВЪРНАТА Е ЗАЯВКАТА КОЯТО БРОИ БЕЛЕЖКИТЕ ЗА ИКОНАТА "БАГАЖ"
         apps = supabase.table("hr_applications").select("*, hr_candidates(*), hr_comments(count)").eq("position_id", target_pos_id).order("created_at", desc=True).execute().data or []
         if st.button("📅 График Интервюта", use_container_width=True): open_schedule_export(apps)
             
@@ -313,7 +357,6 @@ def render_recruitment_module():
         for i, app in enumerate(apps):
             cand = app["hr_candidates"]
             with cols[i % 4]:
-                # ЛОГИКАТА ЗА ИКОНАТА С БАГАЖА ВЕЧЕ РАБОТИ ОТНОВО
                 has_history = app.get("hr_comments", [{}])[0].get("count", 0) > 0
                 
                 with st.container(border=True):
