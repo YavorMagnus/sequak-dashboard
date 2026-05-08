@@ -14,6 +14,12 @@ import time
 COMPANIES = ["REN", "CIM", "MAS", "BAU", "AST", "CMX", "RXS", "SNW", "RXB", "DXM"]
 SCORE_CATEGORIES = ["Търговски", "Складов", "Сервизен", "Маркетингов", "Бек-офис/Управленски"]
 
+# --- ИНИЦИАЛИЗАЦИЯ НА СЕСИЯТА ЗА ДАШБОРДА ---
+if "active_company" not in st.session_state:
+    st.session_state.active_company = None
+if "active_campaign" not in st.session_state:
+    st.session_state.active_campaign = None
+
 # --- ПОМОЩНИ ФУНКЦИИ ---
 def clean_html_text(html_bytes):
     soup = BeautifulSoup(html_bytes.decode("utf-8", errors="ignore"), "html.parser")
@@ -35,7 +41,7 @@ def clean_html_text(html_bytes):
     text = text.replace('\n', '  \n')
     return text.strip()
 
-# --- ХАКЕРСКИ ПАРСЪР (V15 - ЗАМРАЗЕН И УСЪВЪРШЕНСТВАН ЗА БЕЛЕЖКИ) ---
+# --- ХАКЕРСКИ ПАРСЪР (V22 - СТАБИЛЕН И БЕЗОПАСЕН) ---
 def parse_jobs_zip(uploaded_file):
     raw_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
     name_no_dates = re.sub(r'_[0-9]{2}\.[0-9]{2}\.[0-9]{4}.*', '', raw_name)
@@ -67,7 +73,7 @@ def parse_jobs_zip(uploaded_file):
                     text_content = re.sub(r'\s*(\d+\.\s)', r'\n\n\1', text_content)
                     text_content = re.sub(r'(\?[*]?)\s+(.*)', r'\1 **\2**', text_content)
                     cv_data["questionnaire"] = text_content.replace('\n', '  \n')
-                elif any(keyword in html_str for keyword in ["Бележки", "Notes", "Коментари", "Remarks"]) or any(keyword in lower_name for keyword in ["notes", "бележки", "comments"]): 
+                elif "Бележки" in html_str or "Notes" in html_str or "notes" in lower_name: 
                     cv_data["notes"] = clean_html_text(file_bytes)
             elif is_pdf:
                 try:
@@ -92,23 +98,47 @@ def parse_jobs_zip(uploaded_file):
         elif has_legacy_doc: cv_data["cv_text"] = "🚨 **Внимание: Неподдържан формат (.doc)**\n\nТози кандидат е прикачил автобиография в стар формат на Word (1997-2003)..."
     return clean_name.title(), cv_data, photo_base64
 
-# --- МОДАЛ: ГЕНЕРАТОР НА ГРАФИК ---
-@st.dialog("📅 График с интервюта (Експорт)", width="large")
-def open_schedule_export(apps_data):
-    st.write("Генериране на списък за деня:")
-    selected_date = st.date_input("Дата:")
-    schedule_lines = []
+# --- МОДАЛ: УПРАВЛЕНИЕ НА ИНТЕРВЮТА (Resource Dashboard) ---
+@st.dialog("📅 Управление на интервюта", width="large")
+def open_interview_dashboard(apps_data):
+    interviews = []
     for app in apps_data:
-        int_details = app.get("interview_details")
-        if int_details and int_details.get("date") == str(selected_date):
-            cand_name = app["hr_candidates"]["full_name"]
-            time_val = int_details.get("time", "??:??")
-            interviewer = int_details.get("interviewer", "---")
-            schedule_lines.append(f"• {time_val} ч. | {cand_name} | Интервюиращ: {interviewer}")
-    if schedule_lines:
-        schedule_lines.sort()
-        st.code(f"График за {selected_date}:\n" + "\n".join(schedule_lines))
-    else: st.info("Няма интервюта.")
+        details = app.get("interview_details")
+        if details and details.get("interviewer"):
+            interviews.append({
+                "interviewer": details["interviewer"],
+                "date": details.get("date", ""),
+                "time": details.get("time", ""),
+                "candidate": app["hr_candidates"]["full_name"],
+                "status": app["status"],
+            })
+    
+    if not interviews:
+        st.info("Няма насрочени интервюта в тази кампания.")
+        return
+        
+    interviewers = sorted(list(set([i["interviewer"] for i in interviews])))
+    
+    col1, col2 = st.columns(2)
+    with col1: selected_int = st.selectbox("👤 Избери Интервюиращ:", interviewers)
+    with col2: filter_type = st.radio("Филтър по вид:", ["Всички", "Телефонни", "Живи (на място)"], horizontal=True)
+    
+    st.divider()
+    
+    filtered_ints = [i for i in interviews if i["interviewer"] == selected_int]
+    if filter_type == "Телефонни":
+        filtered_ints = [i for i in filtered_ints if "Телефонно" in i["status"]]
+    elif filter_type == "Живи (на място)":
+        filtered_ints = [i for i in filtered_ints if "Живо" in i["status"]]
+        
+    filtered_ints.sort(key=lambda x: (x["date"], x["time"]))
+    
+    if filtered_ints:
+        for i in filtered_ints:
+            icon = "📞" if "Телефонно" in i["status"] else "🤝"
+            st.markdown(f"**{i['date']} | {i['time']} ч.** {icon} {i['candidate']} *(Статус: {i['status']})*")
+    else:
+        st.warning("Няма интервюта от този тип за избрания колега.")
 
 # --- THE MODAL: ИНТЕРАКТИВНО ДОСИЕ ---
 @st.dialog("📄 Картон на кандидата", width="large")
@@ -117,7 +147,6 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
     comments = comments_res.data or []
     is_ghost_record = (status == "Преместен")
     
-    # ИЗВЛИЧАНЕ НА ОЦЕНКИ С ОБРАТНА СЪВМЕСТИМОСТ
     curr_rating = 0
     curr_matrix = {}
     if manual_score:
@@ -125,10 +154,8 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
             curr_rating = manual_score.get("rating_1_to_6", 0)
             curr_matrix = manual_score.get("profile_matrix", {})
         else:
-            # Fallback ако имаме стари данни от предни версии
             curr_matrix = manual_score
 
-    # Подготовка на текста за споделяне и Hero Section
     matrix_details = [f"{k} ({v}%)" for k, v in curr_matrix.items() if int(v) > 0]
     
     col_img, col_info = st.columns([1, 4])
@@ -139,11 +166,8 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
         st.subheader(f"👤 {candidate_name}")
         st.caption(f"Статус: **{status}** | Качен: {created_at[:10]}")
         
-        # ВИЗУАЛИЗАЦИЯ НА ОЦЕНКИТЕ В HERO SECTION
-        if curr_rating > 0:
-            st.success(f"🎯 **Текуща оценка: {curr_rating} / 6**")
-        if sum(int(v) for v in curr_matrix.values()) == 100 and matrix_details:
-            st.info(f"📊 **Профил:** {' | '.join(matrix_details)}")
+        if curr_rating > 0: st.success(f"🎯 **Текуща оценка: {curr_rating} / 6**")
+        if sum(int(v) for v in curr_matrix.values()) == 100 and matrix_details: st.info(f"📊 **Профил:** {' | '.join(matrix_details)}")
             
         transfer_notes = [c for c in comments if "🔄 Преместен" in c["comment_text"]]
         if transfer_notes: st.info(f"ℹ️ {transfer_notes[-1]['comment_text']}")
@@ -152,7 +176,7 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
     st.divider()
     
     if is_ghost_record:
-        st.error("🔒 **Този кандидат е преместен в друга кампания.** Този картон е запазен само за историческа справка и не може да бъде редактиран тук.")
+        st.error("🔒 **Този кандидат е преместен в друга кампания.** Този картон е запазен само за историческа справка.")
     else:
         col1, col2, col3, col4 = st.columns(4)
         statuses = ["Нов", "Телефонно интервю", "Живо интервю", "Одобрен", "Отхвърлен", "Отказал", "Преместен"]
@@ -168,31 +192,24 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
             if other_positions:
                 pos_options = ["--- Изберете обява ---"] + [f"{p['title']} ({p['company_name']})" for p in other_positions]
                 target_pos_f = st.selectbox("Изберете целева кампания (Задължително):", pos_options)
-                if target_pos_f == "--- Изберете обява ---":
-                    btn_disabled = True
-                else:
-                    move_to_pos_id = next(p["id"] for p in other_positions if f"{p['title']} ({p['company_name']})" == target_pos_f)
+                if target_pos_f == "--- Изберете обява ---": btn_disabled = True
+                else: move_to_pos_id = next(p["id"] for p in other_positions if f"{p['title']} ({p['company_name']})" == target_pos_f)
             else:
-                st.warning("Няма други кампании.")
-                btn_disabled = True
+                st.warning("Няма други кампании."); btn_disabled = True
         elif current_sel in ["Отхвърлен", "Отказал"]:
             reasons = ["--- Изберете причина ---", "Неоправдани претенции", "Лошо впечатление", "Липса на опит", "Друго"]
             reject_reason = st.selectbox("Уточнете причина:", reasons)
-            if reject_reason == "--- Изберете причина ---":
-                btn_disabled = True
+            if reject_reason == "--- Изберете причина ---": btn_disabled = True
 
         with col2: 
             if st.button("💾 Запиши промяна", type="primary", use_container_width=True, disabled=btn_disabled):
                 user_name = st.session_state.get("user_name", "Y.Nikolov")
-                
                 if current_sel == "Преместен" and move_to_pos_id:
                     curr_title = next(p["title"] for p in all_global_positions if p["id"] == current_pos_id)
                     curr_company = next(p["company_name"] for p in all_global_positions if p["id"] == current_pos_id)
-                    
                     supabase.table("hr_applications").update({"status": "Преместен"}).eq("id", app_id).execute()
                     msg_old = f"🔄 Преместен към друга кампания от {user_name}."
                     supabase.table("hr_comments").insert({"application_id": app_id, "author_name": "🤖 Система", "comment_text": msg_old}).execute()
-                    
                     new_app = supabase.table("hr_applications").insert({"candidate_id": candidate_id, "position_id": move_to_pos_id, "status": "Нов"}).execute()
                     if new_app.data:
                         new_app_id = new_app.data[0]["id"]
@@ -203,7 +220,6 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
                     if reject_reason:
                         msg = f"🛑 {current_sel} от {user_name}. Причина: {reject_reason}"
                         supabase.table("hr_comments").insert({"application_id": app_id, "author_name": "🤖 Система", "comment_text": msg}).execute()
-                
                 st.session_state.force_open_app_id = app_id
                 st.rerun()
                 
@@ -213,7 +229,6 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
                 curr_title = next(p["title"] for p in all_global_positions if p["id"] == current_pos_id)
                 score_str = f"{curr_rating}/6" if curr_rating > 0 else "Без оценка"
                 prof_str = " | ".join(matrix_details) if matrix_details else "Непопълнен"
-                
                 rich_text = f"""
                 <div style="font-family: Arial, sans-serif; padding: 15px; border: 1px solid #ddd; border-radius: 8px; background-color: #f9f9f9; color: #333;">
                     <h3 style="margin-top: 0; color: #0056b3;">Кандидат: {candidate_name}</h3>
@@ -243,7 +258,6 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
             with st.chat_message("user" if not is_system else "assistant"):
                 st.write(f"**{comm['author_name']}** ({comm['created_at'][:16]})")
                 st.write(comm['comment_text'])
-        
         if not is_ghost_record:
             with st.form("new_comment", clear_on_submit=True):
                 comment_txt = st.text_area("Добави коментар:")
@@ -276,13 +290,15 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
                     supabase.table("hr_comments").insert({"application_id": app_id, "author_name": "🤖 Система", "comment_text": msg}).execute()
                     st.session_state.force_open_app_id = app_id
                     st.rerun()
-        else:
-            st.info("Интервютата трябва да се насрочват в активната обява на кандидата.")
+        else: st.info("Интервютата трябва да се насрочват в активната обява на кандидата.")
 
     with tabs[4]:
         st.write("### 📊 Оценка на кандидата")
         
-        # Определяне на метода за оценка от обявата
+        # ВИЗУАЛИЗАЦИЯ: Кой последен е оценил кандидата
+        rating_notes = [c for c in comments if "📊 Оценяване:" in c["comment_text"]]
+        if rating_notes: st.info(f"ℹ️ {rating_notes[-1]['comment_text']}")
+        
         pos_info = next((p for p in all_global_positions if p["id"] == current_pos_id), None)
         eval_method = pos_info["evaluation_method"] if pos_info else ""
         
@@ -306,15 +322,10 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
             if total_score > 0 and total_score != 100:
                 st.error(f"🚨 Сума на профила: {total_score}% (Трябва да е точно 100% или 0%)")
                 btn_disabled = True
-                
             if st.button("💾 Запиши оценка", use_container_width=True, disabled=btn_disabled):
-                final_score_obj = {
-                    "rating_1_to_6": new_rating,
-                    "profile_matrix": new_matrix
-                }
+                final_score_obj = {"rating_1_to_6": new_rating, "profile_matrix": new_matrix}
                 supabase.table("hr_applications").update({"manual_score": final_score_obj}).eq("id", app_id).execute()
                 
-                # ИСТОРИЯ НА ОЦЕНКИТЕ
                 user_name = st.session_state.get("user_name", "Y.Nikolov")
                 msg_parts = []
                 if "Числова оценка" in eval_method and new_rating > 0: msg_parts.append(f"Оценка: {new_rating}/6")
@@ -332,12 +343,49 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
 # --- ОСНОВЕН РЕНДЕР ---
 def render_recruitment_module():
     st.header("📋 Модул Подбор (V4 Enterprise)")
-    selected_company = st.pills("Изберете компания", COMPANIES, default=None)
-    if not selected_company: st.info("👈 Изберете фирма."); return
+    
+    # СЕСИЙНА ЛОГИКА ЗА ИЗБОР НА ФИРМА
+    selected_company = st.pills("Изберете компания", COMPANIES, default=st.session_state.active_company)
+    if selected_company != st.session_state.active_company:
+        st.session_state.active_company = selected_company
+        st.session_state.active_campaign = None
+        st.rerun()
 
     all_pos_res = supabase.table("hr_positions").select("*").order("company_name").order("title").execute()
     all_global_positions = all_pos_res.data if all_pos_res.data else []
-    current_company_positions = [p for p in all_global_positions if p["company_name"] == selected_company]
+
+    # --- ГЛОБАЛЕН ДАШБОРД (Ако няма избрана фирма) ---
+    if not st.session_state.active_company:
+        st.write("### 🌍 Активни задачи (Глобален Дашборд)")
+        pos_map = {p["id"]: p for p in all_global_positions}
+        
+        new_apps = supabase.table("hr_applications").select("position_id").eq("status", "Нов").execute().data or []
+        counts = {}
+        for a in new_apps:
+            pid = a["position_id"]
+            counts[pid] = counts.get(pid, 0) + 1
+            
+        sorted_counts = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:20]
+        
+        if sorted_counts:
+            for pid, count in sorted_counts:
+                if pid in pos_map:
+                    pinfo = pos_map[pid]
+                    with st.container(border=True):
+                        c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
+                        c1.markdown(f"**{pinfo['title']}**")
+                        c2.caption(f"🏢 {pinfo['company_name']}")
+                        c3.error(f"🔥 {count} Нови кандидати")
+                        if c4.button("Отвори", key=f"open_{pid}", use_container_width=True):
+                            st.session_state.active_company = pinfo['company_name']
+                            st.session_state.active_campaign = pinfo['title']
+                            st.rerun()
+        else:
+            st.info("В момента няма нови кандидати в нито една обява. Отлична работа!")
+        return
+
+    # --- КАМПАНИЕН ИЗГЛЕД ---
+    current_company_positions = [p for p in all_global_positions if p["company_name"] == st.session_state.active_company]
 
     if check_permission("recruitment", "manage_positions"):
         with st.expander("➕ Нова кампания"):
@@ -345,11 +393,18 @@ def render_recruitment_module():
                 t = st.text_input("Име на позицията")
                 pos_method = st.selectbox("Метод за оценка", ["Числова оценка (1-6) + Профилна матрица", "AI Оценка + Профилна матрица"])
                 if st.form_submit_button("Регистрирай"):
-                    if t: supabase.table("hr_positions").insert({"company_name": selected_company, "title": t, "evaluation_method": pos_method}).execute(); st.rerun()
+                    if t: supabase.table("hr_positions").insert({"company_name": st.session_state.active_company, "title": t, "evaluation_method": pos_method}).execute(); st.rerun()
 
     if not current_company_positions: st.warning("Няма кампании."); return
-    selected_pos_title = st.selectbox("Кампания:", [p["title"] for p in current_company_positions])
-    target_pos_id = next(p["id"] for p in current_company_positions if p["title"] == selected_pos_title)
+    
+    camp_options = [p["title"] for p in current_company_positions]
+    def_index = camp_options.index(st.session_state.active_campaign) if st.session_state.active_campaign in camp_options else 0
+    selected_pos_title = st.selectbox("Кампания:", camp_options, index=def_index)
+    
+    if selected_pos_title != st.session_state.active_campaign:
+        st.session_state.active_campaign = selected_pos_title
+        
+    target_pos_id = next(p["id"] for p in current_company_positions if p["title"] == st.session_state.active_campaign)
 
     if check_permission("recruitment", "manage_positions"):
         with st.expander("⚙️ Управление на обявата", expanded=False):
@@ -364,24 +419,20 @@ def render_recruitment_module():
                 else: st.info("Обявата вече е празна.")
 
     if check_permission("recruitment", "upload_candidates"):
-        with st.expander(f"📥 Импорт към '{selected_pos_title}'"):
+        with st.expander(f"📥 Импорт към '{st.session_state.active_campaign}'"):
             if "uploader_key" not in st.session_state: st.session_state.uploader_key = 0
             files = st.file_uploader("ZIP архиви", type="zip", accept_multiple_files=True, key=f"uploader_{st.session_state.uploader_key}")
-            
             col_btn1, col_btn2 = st.columns(2)
-            with col_btn1:
-                start_import = st.button("▶️ Старт импорт", type="primary", use_container_width=True)
+            with col_btn1: start_import = st.button("▶️ Старт импорт", type="primary", use_container_width=True)
             with col_btn2:
                 if files and st.button("🧹 Изчисти списъка", use_container_width=True):
-                    st.session_state.uploader_key += 1
-                    st.rerun()
+                    st.session_state.uploader_key += 1; st.rerun()
             
             if files and start_import:
                 total = len(files)
                 progress_bar = st.progress(0)
                 status_txt = st.empty()
-                success_count = 0
-                failed_files = []
+                success_count = 0; failed_files = []
 
                 for idx, f in enumerate(files):
                     status_txt.text(f"Обработка на файл {idx+1} от {total}...")
@@ -397,32 +448,41 @@ def render_recruitment_module():
                     except Exception as e: failed_files.append((f.name, str(e)))
                     progress_bar.progress(int(((idx + 1) / total) * 100))
                 
-                status_txt.empty()
-                progress_bar.empty()
-                
+                status_txt.empty(); progress_bar.empty()
                 if failed_files:
                     st.error(f"⚠️ {success_count} успешно качени. {len(failed_files)} неуспешни.")
                     for fname, err in failed_files: st.warning(f"❌ {fname}: Базата отказа запис.")
                     if st.button("🔄 Продължи"): st.session_state.uploader_key += 1; st.rerun()
                 else:
                     st.success(f"✅ Всички {success_count} кандидати бяха качени успешно!")
-                    time.sleep(1.5)
-                    st.session_state.uploader_key += 1
-                    st.rerun()
+                    time.sleep(1.5); st.session_state.uploader_key += 1; st.rerun()
 
     st.divider()
+    
+    # УПРАВЛЕНСКИ КОНТРОЛЕН ПАНЕЛ
     col_f1, col_f2 = st.columns([3, 1])
     with col_f1:
         status_filter = st.pills("Филтър:", ["Всички", "Нов", "Телефонно интервю", "Живо интервю", "Одобрен", "Отхвърлен", "Отказал", "Преместен"], default="Всички")
     with col_f2:
-        apps = supabase.table("hr_applications").select("*, hr_candidates(*), hr_comments(count)").eq("position_id", target_pos_id).order("created_at", desc=True).execute().data or []
-        if st.button("📅 График Интервюта", use_container_width=True): open_schedule_export(apps)
+        sort_order = st.selectbox("Сортиране:", ["Най-нови", "Най-висока оценка (1-6)"], label_visibility="collapsed")
+        apps_raw = supabase.table("hr_applications").select("*, hr_candidates(*), hr_comments(count)").eq("position_id", target_pos_id).execute().data or []
+        if st.button("📅 График Интервюта", use_container_width=True): open_interview_dashboard(apps_raw)
             
-    if status_filter != "Всички": apps = [a for a in apps if a["status"] == status_filter]
+    if status_filter != "Всички": apps_raw = [a for a in apps_raw if a["status"] == status_filter]
     
-    if apps:
+    # ЛОГИКА ЗА СОРТИРАНЕ
+    if sort_order == "Най-висока оценка (1-6)":
+        def get_rating(app):
+            score = app.get("manual_score")
+            return int(score.get("rating_1_to_6", 0)) if isinstance(score, dict) else 0
+        apps_raw.sort(key=get_rating, reverse=True)
+    else:
+        apps_raw.sort(key=lambda x: x["created_at"], reverse=True)
+    
+    # ВИЗУАЛИЗАЦИЯ НА КАНДИДАТИТЕ
+    if apps_raw:
         cols = st.columns(4)
-        for i, app in enumerate(apps):
+        for i, app in enumerate(apps_raw):
             cand = app["hr_candidates"]
             with cols[i % 4]:
                 has_history = app.get("hr_comments", [{}])[0].get("count", 0) > 0
@@ -434,6 +494,7 @@ def render_recruitment_module():
     else:
         st.info("Няма кандидати в тази категория.")
 
+    # ПРЕЗАРЕЖДАНЕ НА КАРТОН
     if "force_open_app_id" in st.session_state and st.session_state.force_open_app_id:
         tid = st.session_state.force_open_app_id
         f_app = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("id", tid).execute().data
