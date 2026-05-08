@@ -295,7 +295,6 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
     with tabs[4]:
         st.write("### 📊 Оценка на кандидата")
         
-        # ВИЗУАЛИЗАЦИЯ: Кой последен е оценил кандидата
         rating_notes = [c for c in comments if "📊 Оценяване:" in c["comment_text"]]
         if rating_notes: st.info(f"ℹ️ {rating_notes[-1]['comment_text']}")
         
@@ -344,7 +343,6 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
 def render_recruitment_module():
     st.header("📋 Модул Подбор (V4 Enterprise)")
     
-    # СЕСИЙНА ЛОГИКА ЗА ИЗБОР НА ФИРМА
     selected_company = st.pills("Изберете компания", COMPANIES, default=st.session_state.active_company)
     if selected_company != st.session_state.active_company:
         st.session_state.active_company = selected_company
@@ -354,7 +352,6 @@ def render_recruitment_module():
     all_pos_res = supabase.table("hr_positions").select("*").order("company_name").order("title").execute()
     all_global_positions = all_pos_res.data if all_pos_res.data else []
 
-    # --- ГЛОБАЛЕН ДАШБОРД (Ако няма избрана фирма) ---
     if not st.session_state.active_company:
         st.write("### 🌍 Активни задачи (Глобален Дашборд)")
         pos_map = {p["id"]: p for p in all_global_positions}
@@ -384,7 +381,6 @@ def render_recruitment_module():
             st.info("В момента няма нови кандидати в нито една обява. Отлична работа!")
         return
 
-    # --- КАМПАНИЕН ИЗГЛЕД ---
     current_company_positions = [p for p in all_global_positions if p["company_name"] == st.session_state.active_company]
 
     if check_permission("recruitment", "manage_positions"):
@@ -459,7 +455,6 @@ def render_recruitment_module():
 
     st.divider()
     
-    # УПРАВЛЕНСКИ КОНТРОЛЕН ПАНЕЛ
     col_f1, col_f2 = st.columns([3, 1])
     with col_f1:
         status_filter = st.pills("Филтър:", ["Всички", "Нов", "Телефонно интервю", "Живо интервю", "Одобрен", "Отхвърлен", "Отказал", "Преместен"], default="Всички")
@@ -470,7 +465,6 @@ def render_recruitment_module():
             
     if status_filter != "Всички": apps_raw = [a for a in apps_raw if a["status"] == status_filter]
     
-    # ЛОГИКА ЗА СОРТИРАНЕ
     if sort_order == "Най-висока оценка (1-6)":
         def get_rating(app):
             score = app.get("manual_score")
@@ -479,7 +473,6 @@ def render_recruitment_module():
     else:
         apps_raw.sort(key=lambda x: x["created_at"], reverse=True)
     
-    # ВИЗУАЛИЗАЦИЯ НА КАНДИДАТИТЕ
     if apps_raw:
         cols = st.columns(4)
         for i, app in enumerate(apps_raw):
@@ -487,14 +480,19 @@ def render_recruitment_module():
             with cols[i % 4]:
                 has_history = app.get("hr_comments", [{}])[0].get("count", 0) > 0
                 with st.container(border=True):
-                    st.markdown(f"**{cand['full_name']}** {'📦' if has_history else ''}")
-                    st.caption(f"{app['status']}")
+                    # V26: ВИЗУАЛНО ЗАГЛУШАВАНЕ НА "ПРЕМЕСТЕН" (GHOST CARDS)
+                    if app['status'] == "Преместен":
+                        st.markdown(f"<span style='opacity: 0.5;'>**{cand['full_name']}** 🔒</span>", unsafe_allow_html=True)
+                        st.caption(f"<span style='opacity: 0.5;'>{app['status']}</span>", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"**{cand['full_name']}** {'📦' if has_history else ''}")
+                        st.caption(f"{app['status']}")
+                        
                     if st.button("📄 Отвори", key=f"btn_{app['id']}", use_container_width=True):
                         open_candidate_card(app["id"], cand["id"], cand["full_name"], app["status"], cand["raw_cv_data"], cand["photo_thumbnail"], app["manual_score"], all_global_positions, target_pos_id, app["created_at"], app.get("interview_details", {}))
     else:
         st.info("Няма кандидати в тази категория.")
 
-    # ПРЕЗАРЕЖДАНЕ НА КАРТОН
     if "force_open_app_id" in st.session_state and st.session_state.force_open_app_id:
         tid = st.session_state.force_open_app_id
         f_app = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("id", tid).execute().data
