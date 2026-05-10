@@ -2,17 +2,21 @@ import streamlit as st
 from supabase import create_client, Client
 import os
 
-# Инициализация на Supabase
-# Използваме st.secrets, тъй като това е стандартът за сигурност в Streamlit Cloud
-url: str = st.secrets["SUPABASE_URL"]
-key: str = st.secrets["SUPABASE_KEY"]
-supabase: Client = create_client(url, key)
+# --- УМНА ИНИЦИАЛИЗАЦИЯ НА SUPABASE ---
+# Търси ключовете първо в secrets, после в environment variables
+try:
+    url = st.secrets.get("SUPABASE_URL") or os.environ.get("SUPABASE_URL")
+    key = st.secrets.get("SUPABASE_KEY") or os.environ.get("SUPABASE_KEY")
+    if not url or not key:
+        raise ValueError("Липсват ключове за Supabase!")
+    supabase: Client = create_client(url, key)
+except Exception as e:
+    st.error(f"Грешка при свързване с базата: {e}")
 
 # Глобални роли в системата
 SYSTEM_ROLES = ["Супер-админ", "Администратор", "Power User", "Четец"]
 
 # Матрица на правата (Permissions Matrix)
-# Admin Panel автоматично чете този речник, за да рисува интерфейса за управление
 AVAILABLE_PERMISSIONS = {
     "dashboard": {
         "name": "Модул: Пропуснати ползи",
