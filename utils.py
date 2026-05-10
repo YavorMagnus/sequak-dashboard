@@ -1,44 +1,57 @@
 import streamlit as st
 from supabase import create_client, Client
-import os
+import pandas as pd
+import re
 
-# --- ВРЪЗКА СЪС SUPABASE (ВЪЗСТАНОВЕНА СТАБИЛНА ВЕРСИЯ) ---
-# Използваме try/except блок, за да подсигурим връзката при всякакви имена на ключовете
-try:
-    # Първо пробваме стандартните малки букви (най-вероятните оригинални)
-    url = st.secrets.get("supabase_url") or st.secrets.get("SUPABASE_URL")
-    key = st.secrets.get("supabase_key") or st.secrets.get("SUPABASE_KEY")
-    
-    if not url or not key:
-        st.error("❌ Критична грешка: Ключовете 'supabase_url' и 'supabase_key' не са намерени в Secrets!")
-        st.stop()
-        
-    supabase: Client = create_client(url, key)
-except Exception as e:
-    st.error(f"❌ Грешка при инициализация на Supabase: {e}")
-    st.stop()
+# --- СВЪРЗВАНЕ С БАЗАТА ДАННИ ---
+SUPABASE_URL = "https://cymfodenkklcjhjgfeau.supabase.co"
+SUPABASE_KEY = "sb_publishable_blR-3tOs1E8M-gXtv8DVBA_LiEGG8Y6"
 
-# --- ГЛОБАЛНИ КОНФИГУРАЦИИ ---
-SYSTEM_ROLES = ["Супер-админ", "Администратор", "Power User", "Четец"]
+@st.cache_resource
+def init_connection():
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Матрица на правата (АКТУАЛИЗИРАНА ЗА V37)
-# Тази структура позволява на admin_panel.py да управлява новите детайлни права
+supabase: Client = init_connection()
+
+# --- ГЛОБАЛНИ ДАННИ ---
+@st.cache_data(ttl=600)
+def get_companies():
+    try:
+        res = supabase.table("companies").select("id, code").execute()
+        return {row['code'].upper(): row['id'] for row in res.data}
+    except Exception:
+        return {}
+
+COMPANY_MAP = get_companies()
+COMPANY_LIST = list(COMPANY_MAP.keys()) if COMPANY_MAP else ["Няма заредени фирми"]
+
+# Бизнес роли за процесите
+ROLES_LIST = ["Служител", "Пряк ръководител", "Отговорник качество", "Управител", "Контролинг", "RXG-адм", "CEO", "Друг"]
+
+# Системни роли за достъп (Новата структура)
+SYSTEM_ROLES = ["Супер-админ", "Администратор", "Power user", "Супер-четец", "Четец"]
+
+CONCLUSIONS = ["Техническа грешка", "Липса на знания/умения", "Нарушение", "Не сме сигурни", "Липса на ресурс", "Дезорганизация", "Идея за подобрение"]
+RECOMMENDATIONS = ["Техническа корекция", "Обучение", "Наказание", "Проверка (поле)", "Планиране на ресурс", "Реорганизация", "Обсъждане с клиент"]
+TERMINAL_STATUSES = ["Приключено", "Сгрешен/Анулиран"]
+
+# --- МАТРИЦА НА ПРАВАТА (PERMISSIONS) ---
 AVAILABLE_PERMISSIONS = {
-    "dashboard": {
+    "mp_dashboard": {
         "name": "Модул: Пропуснати ползи",
         "actions": {
             "read": "Визуализация на таблото (Четене)",
             "export": "Експорт на данни (Excel)",
-            "upload": "Зареждане на нови данни (Внос)"
+            "upload_data": "Зареждане на нови данни (Внос)"
         }
     },
-    "complaints": {
+    "ro_registry": {
         "name": "Модул: Регистър Оплаквания",
         "actions": {
             "read": "Визуализация на регистъра (Четене)",
-            "create": "Въвеждане на нов сигнал",
-            "edit": "Редакция на сигнали (работа по канбан)",
-            "cancel": "Анулиране на сигнал (Сгрешен запис)",
+            "create_ticket": "Въвеждане на нов сигнал",
+            "edit_kanban": "Редакция на сигнали (работа по канбан)",
+            "cancel_ticket": "Анулиране на сигнал (Сгрешен запис)",
             "export": "Експорт на данни (Excel)"
         }
     },
@@ -57,17 +70,82 @@ AVAILABLE_PERMISSIONS = {
 
 def check_permission(module, action):
     """
-    Универсална функция за проверка на права.
-    Супер-админ и Администратор винаги имат пълен достъп.
-    За останалите роли се проверява списъкът с права в сесията.
+    Умна функция за проверка на правата въз основа на хибридния модел.
     """
-    if "user_role" not in st.session_state:
-        return False
-    
-    role = st.session_state.user_role
+    role = st.session_state.get('user_role', '')
+
+    # Супер-админ и Администратор могат всичко (с изкл. на достъпа до админ панела, който се филтрира в рутера)
     if role in ["Супер-админ", "Администратор"]:
         return True
-        
-    permissions = st.session_state.get("permissions", {})
-    module_perms = permissions.get(module, [])
-    return action in module_perms
+
+    # Супер-четец вижда всичко навсякъде, но няма права за писане/екшън
+    if role == "Супер-четец":
+        return True if action == "read" else False
+
+    # За Power user, Четец и всички останали - проверяваме техния JSON в сесията
+    perms = st.session_state.get('user_permissions', {})
+    mod_perms = perms.get(module, {})
+    return mod_perms.get(action, False)
+
+
+# --- ГЛОБАЛНИ ФУНКЦИИ ---
+def standardize_company_code(excel_name):
+    name = str(excel_name).lower()
+    if 'ren' in name: return 'REN'
+    if 'rcd' in name or ('cim' in name and 'cmx' not in name):
+        return 'CIM' if 'CIM' in COMPANY_MAP else 'RCD'
+    if 'mas' in name: return 'MAS'
+    if 'cmx' in name: return 'CMX'
+    return str(excel_name).upper().strip()
+
+def parse_smart_time(t_str):
+    if not t_str: return None
+    t_str = str(t_str).strip()
+    if ':' in t_str:
+        parts = t_str.split(':')
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            hh, mm = int(parts[0]), int(parts[1])
+            if 0 <= hh <= 23 and 0 <= mm <= 59: return f"{hh:02d}:{mm:02d}:00"
+        elif len(parts) == 3 and all(p.isdigit() for p in parts):
+            hh, mm, ss = int(parts[0]), int(parts[1]), int(parts[2])
+            if 0 <= hh <= 23 and 0 <= mm <= 59 and 0 <= ss <= 59: return f"{hh:02d}:{mm:02d}:{ss:02d}"
+    clean_str = re.sub(r"\D", "", t_str)
+    if len(clean_str) in [3, 4]:
+        clean_str = clean_str.zfill(4)
+        hh, mm = int(clean_str[:2]), int(clean_str[2:])
+        if 0 <= hh <= 23 and 0 <= mm <= 59: return f"{hh:02d}:{mm:02d}:00"
+    elif len(clean_str) in [5, 6]:
+        clean_str = clean_str.zfill(6)
+        hh, mm, ss = int(clean_str[:2]), int(clean_str[2:4]), int(clean_str[4:])
+        if 0 <= hh <= 23 and 0 <= mm <= 59 and 0 <= ss <= 59: return f"{hh:02d}:{mm:02d}:{ss:02d}"
+    return None
+
+def get_related_signals(ticket, df_complaints):
+    if df_complaints is None or df_complaints.empty:
+        return pd.DataFrame()
+    
+    c_phone = str(ticket.get('client_phone', '')).strip()
+    c_email = str(ticket.get('client_email', '')).strip()
+    c_eik = str(ticket.get('client_eik', '')).strip()
+
+    if not c_phone and not c_email and not c_eik:
+        return pd.DataFrame()
+    
+    t_date = pd.to_datetime(ticket.get('event_datetime'), errors='coerce')
+    if pd.isna(t_date): return pd.DataFrame()
+    if t_date.tzinfo is not None: t_date = t_date.replace(tzinfo=None)
+
+    mask = (df_complaints['id'] != ticket['id'])
+    
+    comp_dates = pd.to_datetime(df_complaints['event_datetime'], errors='coerce')
+    if comp_dates.dt.tz is not None: comp_dates = comp_dates.dt.tz_localize(None)
+
+    date_diff = (comp_dates - t_date).abs()
+    mask &= (date_diff.dt.days <= 30)
+
+    match_cond = pd.Series(False, index=df_complaints.index)
+    if c_phone: match_cond |= (df_complaints['client_phone'].astype(str).str.strip() == c_phone)
+    if c_email: match_cond |= (df_complaints['client_email'].astype(str).str.strip() == c_email)
+    if c_eik: match_cond |= (df_complaints['client_eik'].astype(str).str.strip() == c_eik)
+
+    return df_complaints[mask & match_cond]
