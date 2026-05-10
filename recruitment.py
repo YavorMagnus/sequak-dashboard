@@ -106,7 +106,7 @@ def open_interview_dashboard(apps_data, global_pos_map=None):
                 "app_id": app["id"], "pos_id": app["position_id"], "company": comp_title,
                 "interviewer": details["interviewer"], "date": details.get("date", ""), 
                 "time": details.get("time", ""), "candidate": app["hr_candidates"]["full_name"], 
-                "status": app["status"], "type": details.get("type", "Установи контакт")
+                "status": app["status"], "type": details.get("type", "Първи контакт")
             })
             
     if not interviews: st.info("Няма насрочени интервюта."); return
@@ -114,17 +114,17 @@ def open_interview_dashboard(apps_data, global_pos_map=None):
     interviewers = sorted(list(set([i["interviewer"] for i in interviews])))
     col1, col2 = st.columns(2)
     with col1: selected_int = st.selectbox("👤 Избери Интервюиращ:", interviewers)
-    with col2: filter_type = st.radio("Филтър по вид:", ["Всички", "Установи контакт", "Виж наживо"], horizontal=True)
+    with col2: filter_type = st.radio("Филтър по вид:", ["Всички", "Първи контакт", "Виж наживо"], horizontal=True)
     
     st.divider()
     filtered_ints = [i for i in interviews if i["interviewer"] == selected_int]
-    if filter_type == "Установи контакт": filtered_ints = [i for i in filtered_ints if i["type"] == "Установи контакт"]
+    if filter_type == "Първи контакт": filtered_ints = [i for i in filtered_ints if i["type"] == "Първи контакт"]
     elif filter_type == "Виж наживо": filtered_ints = [i for i in filtered_ints if i["type"] == "Виж наживо"]
         
     filtered_ints.sort(key=lambda x: (x["date"], x["time"]))
     if filtered_ints:
         for i in filtered_ints:
-            icon = "📞" if i["type"] == "Установи контакт" else "🤝"
+            icon = "📞" if i["type"] == "Първи контакт" else "🤝"
             c1, c2 = st.columns([5, 1])
             c1.markdown(f"**{i['date']} | {i['time']} ч.** {icon} **{i['candidate']}** *(Фирма: {i['company']})*")
             if c2.button("Отвори", key=f"btn_route_{i['app_id']}"):
@@ -172,14 +172,14 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
             
         transfer_notes = [c for c in comments if "🔄 Преместен" in c["comment_text"] or "🔄 Копиран" in c["comment_text"]]
         if transfer_notes: st.info(f"ℹ️ {transfer_notes[-1]['comment_text']}")
-        if interview_details: st.warning(f"⏰ **Интервю:** {interview_details.get('type', 'Установи контакт')} | {interview_details.get('date')} - {interview_details.get('time')} с {interview_details.get('interviewer')}")
+        if interview_details: st.warning(f"⏰ **Интервю:** {interview_details.get('type', 'Първи контакт')} | {interview_details.get('date')} - {interview_details.get('time')} с {interview_details.get('interviewer')}")
 
     st.divider()
     
     if is_ghost_record: st.error("🔒 **Този кандидат е преместен в друга кампания.** Този картон е запазен само за историческа справка.")
     elif can_evaluate:
         col1, col2, col3, col4 = st.columns(4)
-        statuses = ["Нов", "Установи контакт", "Искам да го видя", "Виж наживо", "Одобрен", "Отхвърлен", "Отказал", "Копирай / Премести"]
+        statuses = ["Нов", "Установи контакт", "Първи контакт", "Искам да го видя", "Виж наживо", "Одобрен", "Отхвърлен", "Отказал", "Копирай / Премести"]
         c_status = "Копирай / Премести" if status == "Преместен" else status
         with col1: current_sel = st.selectbox("Смени статус", statuses, index=statuses.index(c_status) if c_status in statuses else 0, label_visibility="collapsed")
         
@@ -280,7 +280,6 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
         st.write("### 📅 Управление на интервюта")
         if not is_ghost_record and can_evaluate:
             
-            # ЗОНА 1: ЗАЯВКА ОТ МЕНИДЖЪР
             st.markdown("#### 🎯 1. Заявка за интервю (Към HR)")
             with st.form("propose_dates"):
                 c_pd1, c_pd2 = st.columns(2)
@@ -299,13 +298,12 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
             
             st.divider()
             
-            # ЗОНА 2: ОКОНЧАТЕЛНО НАСРОЧВАНЕ ОТ HR
             st.markdown("#### ✅ 2. Окончателно насрочване (От HR)")
             with st.form("interview_form"):
                 col_d, col_t, col_y = st.columns(3)
                 with col_d: i_date = st.date_input("Точна дата")
                 with col_t: i_time = st.time_input("Точен час")
-                with col_y: i_type = st.selectbox("Вид интервю", ["Установи контакт", "Виж наживо"], index=1 if c_status == "Искам да го видя" else 0)
+                with col_y: i_type = st.selectbox("Вид интервю", ["Първи контакт", "Виж наживо"], index=1 if c_status == "Искам да го видя" else 0)
                 
                 i_person_sel = st.selectbox("Интервюиращ (Избери или напиши):", sys_users + ["Друг..."])
                 if i_person_sel == "Друг...": i_person = st.text_input("Въведете име:")
@@ -315,7 +313,7 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
                     if i_person_sel == "Друг..." and not i_person: st.error("Моля въведете име на интервюиращ!")
                     else:
                         supabase.table("hr_applications").update({"interview_details": {"date": str(i_date), "time": str(i_time)[:5], "interviewer": i_person, "type": i_type}, "status": i_type}).eq("id", app_id).execute()
-                        icon = "📞" if i_type == "Установи контакт" else "🤝"
+                        icon = "📞" if i_type == "Първи контакт" else "🤝"
                         supabase.table("hr_comments").insert({"application_id": app_id, "author_name": "🤖 Система", "comment_text": f"{icon} Насрочено '{i_type}' за {i_date} от {str(i_time)[:5]} ч. с {i_person}."}).execute()
                         st.session_state.force_open_app_id = app_id; st.rerun()
 
@@ -532,7 +530,7 @@ def render_recruitment_module():
 
     st.divider()
     c_f1, c_f2 = st.columns([3, 1])
-    with c_f1: status_filter = st.pills("Филтър:", ["Всички", "Нов", "Установи контакт", "Искам да го видя", "Виж наживо", "Одобрен", "Отхвърлен", "Отказал", "Преместен"], default="Всички")
+    with c_f1: status_filter = st.pills("Филтър:", ["Всички", "Нов", "Установи контакт", "Първи контакт", "Искам да го видя", "Виж наживо", "Одобрен", "Отхвърлен", "Отказал", "Преместен"], default="Всички")
     with c_f2:
         sort_order = st.selectbox("Сортиране:", ["Най-нови", "Субективна оценка (1-6)", "% по Скор-карта"], label_visibility="collapsed")
         apps_raw = supabase.table("hr_applications").select("*, hr_candidates(*), hr_comments(count)").eq("position_id", target_pos_id).execute().data or []
