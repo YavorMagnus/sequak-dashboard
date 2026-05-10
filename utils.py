@@ -2,21 +2,27 @@ import streamlit as st
 from supabase import create_client, Client
 import os
 
-# --- УМНА ИНИЦИАЛИЗАЦИЯ НА SUPABASE ---
-# Търси ключовете първо в secrets, после в environment variables
+# --- ВРЪЗКА СЪС SUPABASE (ВЪЗСТАНОВЕНА СТАБИЛНА ВЕРСИЯ) ---
+# Използваме try/except блок, за да подсигурим връзката при всякакви имена на ключовете
 try:
-    url = st.secrets.get("SUPABASE_URL") or os.environ.get("SUPABASE_URL")
-    key = st.secrets.get("SUPABASE_KEY") or os.environ.get("SUPABASE_KEY")
+    # Първо пробваме стандартните малки букви (най-вероятните оригинални)
+    url = st.secrets.get("supabase_url") or st.secrets.get("SUPABASE_URL")
+    key = st.secrets.get("supabase_key") or st.secrets.get("SUPABASE_KEY")
+    
     if not url or not key:
-        raise ValueError("Липсват ключове за Supabase!")
+        st.error("❌ Критична грешка: Ключовете 'supabase_url' и 'supabase_key' не са намерени в Secrets!")
+        st.stop()
+        
     supabase: Client = create_client(url, key)
 except Exception as e:
-    st.error(f"Грешка при свързване с базата: {e}")
+    st.error(f"❌ Грешка при инициализация на Supabase: {e}")
+    st.stop()
 
-# Глобални роли в системата
+# --- ГЛОБАЛНИ КОНФИГУРАЦИИ ---
 SYSTEM_ROLES = ["Супер-админ", "Администратор", "Power User", "Четец"]
 
-# Матрица на правата (Permissions Matrix)
+# Матрица на правата (АКТУАЛИЗИРАНА ЗА V37)
+# Тази структура позволява на admin_panel.py да управлява новите детайлни права
 AVAILABLE_PERMISSIONS = {
     "dashboard": {
         "name": "Модул: Пропуснати ползи",
