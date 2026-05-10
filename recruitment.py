@@ -307,7 +307,8 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
                         if i_person_sel == "Друг..." and not i_person: st.error("Моля въведете име на интервюиращ!")
                         else:
                             final_status = "Телефонно интервю" if i_type == "Телефонно" else "Живо интервю"
-                            supabase.table("hr_applications").update({"interview_details": {"date": str(i_date), "time": str(i_time)[:5], "interviewer": i_person, "type": i_type}, "status": final_status}).execute()
+                            # ФИКС: ДОБАВЕНО .eq("id", app_id) ЗА ДА НЕ ПРЕЗАПИСВА ВСИЧКИ
+                            supabase.table("hr_applications").update({"interview_details": {"date": str(i_date), "time": str(i_time)[:5], "interviewer": i_person, "type": i_type}, "status": final_status}).eq("id", app_id).execute()
                             icon = "📞" if i_type == "Телефонно" else "🤝"
                             supabase.table("hr_comments").insert({"application_id": app_id, "author_name": "🤖 Система", "comment_text": f"{icon} Насрочено {i_type} интервю за {i_date} от {str(i_time)[:5]} ч. с {i_person}."}).execute()
                             st.session_state.force_open_app_id = app_id; st.rerun()
@@ -410,9 +411,13 @@ def render_recruitment_module():
                     col1, col2, col3, col4 = st.columns([3, 1, 2, 1])
                     col1.markdown(f"**{pinfo['title']}**<br><span style='font-size:0.8em; color:#888;'>💰 {pinfo.get('salary_min','-')} - {pinfo.get('salary_max','-')} | 📍 {pinfo.get('city','-')} | {pinfo.get('work_type','-')}</span>", unsafe_allow_html=True)
                     col2.caption(f"🏢 {pinfo['company_name']}")
-                    if p_level == "🔥 ПОЖАР": col3.error(f"🔥 {count} Нови (ПОЖАР)")
-                    elif p_level == "Спешно": col3.warning(f"⚡ {count} Нови (Спешно)")
-                    else: col3.info(f"ℹ️ {count} Нови")
+                    
+                    # ПОКАЗВАНЕ НА ПРИОРИТЕТА В ДАШБОРДА МНОГО ЯСНО
+                    if p_level == "🔥 ПОЖАР": col3.error(f"🔥 ПОЖАР ({count} Нови)")
+                    elif p_level == "Спешно": col3.warning(f"⚡ Спешно ({count} Нови)")
+                    elif p_level == "Оглеждаме се": col3.success(f"👀 Оглеждаме се ({count} Нови)")
+                    else: col3.info(f"ℹ️ Нормално ({count} Нови)")
+                    
                     if col4.button("Отвори", key=f"op_{pinfo['id']}", use_container_width=True): 
                         st.session_state.active_company = pinfo['company_name']; st.session_state.active_campaign = pinfo['title']; st.rerun()
                     st.markdown("</div>", unsafe_allow_html=True)
@@ -439,8 +444,8 @@ def render_recruitment_module():
                 t = st.text_input("Име на позицията *")
                 pos_method = st.selectbox("Метод за оценка", ["Числова оценка 1-6 - обективна и субективна", "AI Оценка + Профилна матрица"])
                 cc1, cc2 = st.columns(2)
-                with cc1: s_min = st.text_input("Мин. възнаграждение (BGN)")
-                with cc1: s_max = st.text_input("Макс. възнаграждение (BGN)")
+                with cc1: s_min = st.text_input("Мин. възнаграждение (EUR)")
+                with cc1: s_max = st.text_input("Макс. възнаграждение (EUR)")
                 with cc2: city = st.text_input("Град")
                 with cc2: w_type = st.selectbox("Тип работа", ["Присъствено", "Хибрид", "Remote"])
                 priority = st.selectbox("Приоритет", ["Оглеждаме се", "Нормално", "Спешно", "🔥 ПОЖАР"], index=1)
@@ -457,6 +462,33 @@ def render_recruitment_module():
 
     if check_permission("recruitment", "manage_positions"):
         with st.expander("⚙️ Управление на обявата", expanded=False):
+            # НОВО: РЕДАКЦИЯ НА ПАРАМЕТРИ
+            p_info = next((p for p in all_global_positions if p["id"] == target_pos_id), {})
+            st.write("📝 **Редакция на параметри**")
+            with st.form("edit_pos_form"):
+                e_c1, e_c2 = st.columns(2)
+                with e_c1: e_s_min = st.text_input("Мин. възнаграждение (EUR)", value=p_info.get("salary_min", ""))
+                with e_c1: e_s_max = st.text_input("Макс. възнаграждение (EUR)", value=p_info.get("salary_max", ""))
+                with e_c2: e_city = st.text_input("Град", value=p_info.get("city", ""))
+                wt_opts = ["Присъствено", "Хибрид", "Remote"]
+                wt_curr = p_info.get("work_type", "Присъствено")
+                with e_c2: e_w_type = st.selectbox("Тип работа", wt_opts, index=wt_opts.index(wt_curr) if wt_curr in wt_opts else 0)
+                
+                pri_opts = ["Оглеждаме се", "Нормално", "Спешно", "🔥 ПОЖАР"]
+                pri_curr = p_info.get("priority", "Нормално")
+                e_priority = st.selectbox("Приоритет (Спешност)", pri_opts, index=pri_opts.index(pri_curr) if pri_curr in pri_opts else 1)
+                
+                if st.form_submit_button("💾 Запиши промените"):
+                    supabase.table("hr_positions").update({
+                        "salary_min": e_s_min, "salary_max": e_s_max, 
+                        "city": e_city, "work_type": e_w_type, 
+                        "priority": e_priority
+                    }).eq("id", target_pos_id).execute()
+                    st.success("Параметрите са обновени успешно!")
+                    time.sleep(1); st.rerun()
+            
+            st.divider()
+            
             if st.button("🚨 Изтрий ВСИЧКИ кандидати тук", type="primary"):
                 for a in supabase.table("hr_applications").select("id, candidate_id").eq("position_id", target_pos_id).execute().data or []:
                     if len((supabase.table("hr_applications").select("id").eq("candidate_id", a["candidate_id"]).neq("position_id", target_pos_id).execute()).data or []) > 0: supabase.table("hr_applications").delete().eq("id", a["id"]).execute()
