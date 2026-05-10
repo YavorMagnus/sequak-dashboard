@@ -15,7 +15,7 @@ from datetime import datetime
 if "active_company" not in st.session_state: st.session_state.active_company = None
 if "active_campaign_id" not in st.session_state: st.session_state.active_campaign_id = None
 
-# Карта на емоджитата за статус в ъгъла на картите
+# Карта на емоджитата за статус
 EMOJI_MAP = {
     "Нов": "✨",
     "Установи контакт": "📞",
@@ -29,7 +29,20 @@ EMOJI_MAP = {
     "Преместен": "📦"
 }
 
-# --- ПОМОЩНИ ФУНКЦИИ ---
+# --- ПОМОЩНИ ФУНКЦИИ (ЛОГИЧЕСКИ БЛОК) ---
+def log_status_change(app_id, old_status, new_status):
+    """Записва всяка промяна на статус в историческата таблица за статистики."""
+    current_user = st.session_state.get("username", "Unknown")
+    try:
+        supabase.table("hr_status_history").insert({
+            "application_id": app_id,
+            "old_status": old_status,
+            "new_status": new_status,
+            "changed_by": current_user
+        }).execute()
+    except:
+        pass # Не прекъсваме UX при грешка в логването
+
 def clean_html_text(html_bytes):
     soup = BeautifulSoup(html_bytes.decode("utf-8", errors="ignore"), "html.parser")
     for tag in soup(["script", "style", "head", "noscript", "title"]): tag.extract()
@@ -60,7 +73,7 @@ def get_pos_display_name(p):
     status_str = " 🗄️[АРХИВ]" if p.get('status') == 'Архивирана' else ""
     return f"{p['title']}{city_str}{status_str}"
 
-# --- ХАКЕРСКИ ПАРСЪР ---
+# --- ПАРСЪР (БЪДЕЩ МОДУЛ PARSERS.PY) ---
 def parse_jobs_zip(uploaded_file):
     raw_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
     name_no_dates = re.sub(r'_[0-9]{2}\.[0-9]{2}\.[0-9]{4}.*', '', raw_name)
@@ -270,16 +283,21 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
                     if not keep_active:
                         supabase.table("hr_applications").update({"status": "Преместен", "resolution_reason": None}).eq("id", app_id).execute()
                         supabase.table("hr_comments").insert({"application_id": app_id, "author_name": "🤖 Система", "comment_text": f"🔄 Преместен в кампании: {dest_str} от {current_user}."}).execute()
+                        log_status_change(app_id, status, "Преместен")
                     else:
                         supabase.table("hr_comments").insert({"application_id": app_id, "author_name": "🤖 Система", "comment_text": f"🔄 Копиран към кампании: {dest_str} от {current_user}."}).execute()
+                    
                     for t_id in target_pos_ids:
                         new_app = supabase.table("hr_applications").insert({"candidate_id": candidate_id, "position_id": t_id, "status": "Нов"}).execute()
                         if new_app.data:
                             supabase.table("hr_comments").insert({"application_id": new_app.data[0]["id"], "author_name": "🤖 Система", "comment_text": f"🔄 {'Копиран' if keep_active else 'Преместен'} тук от {current_user}. Източник: '{curr_title}'"}).execute()
+                            log_status_change(new_app.data[0]["id"], "None (New)", "Нов")
                 else:
                     update_data = {"status": current_sel, "resolution_reason": reject_reason if current_sel in ["Отхвърлен", "Отказал"] else None}
                     supabase.table("hr_applications").update(update_data).eq("id", app_id).execute()
                     if reject_reason: supabase.table("hr_comments").insert({"application_id": app_id, "author_name": "🤖 Система", "comment_text": f"🛑 {current_sel} от {current_user}. Причина: {reject_reason}"}).execute()
+                    log_status_change(app_id, status, current_sel)
+                
                 st.session_state.force_open_app_id = app_id; st.rerun()
                 
         with col3: 
@@ -291,7 +309,6 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
         with col4:
             if check_permission("recruitment", "soft_delete"):
                 if st.button("🗑️ Изтрий", use_container_width=True):
-                    # SOFT DELETE LOGIC
                     user_role = st.session_state.get('user_role', '')
                     if user_role in ["Супер-админ", "Администратор"]:
                         other_apps = supabase.table("hr_applications").select("id").eq("candidate_id", candidate_id).neq("id", app_id).execute()
@@ -359,6 +376,7 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
                 
                 if st.form_submit_button("🎯 Заяви 'Избран за интервю'"):
                     supabase.table("hr_applications").update({"status": "Избран за интервю"}).eq("id", app_id).execute()
+                    log_status_change(app_id, status, "Избран за интервю")
                     msg = f"🟡 ЗАЯВКА ЗА СРЕЩА:\n- Опция 1: {d1} ({t1})\n- Опция 2: {d2} ({t2})"
                     supabase.table("hr_comments").insert({"application_id": app_id, "author_name": current_user, "comment_text": msg}).execute()
                     st.session_state.force_open_app_id = app_id; st.rerun()
@@ -379,6 +397,7 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
                     if i_person_sel == "Друг..." and not i_person: st.error("Моля въведете име на интервюиращ!")
                     else:
                         supabase.table("hr_applications").update({"interview_details": {"date": str(i_date), "time": str(i_time)[:5], "interviewer": i_person, "type": i_type}, "status": i_type}).eq("id", app_id).execute()
+                        log_status_change(app_id, status, i_type)
                         icon = "📞" if i_type == "В процес на контакт" else "🤝"
                         supabase.table("hr_comments").insert({"application_id": app_id, "author_name": "🤖 Система", "comment_text": f"{icon} Насрочено '{i_type}' за {i_date} от {str(i_time)[:5]} ч. с {i_person}."}).execute()
                         st.session_state.force_open_app_id = app_id; st.rerun()
@@ -431,6 +450,7 @@ def render_recruitment_module():
     sys_reject_reasons = settings_dict.get("reject_reasons", ["Неоправдани претенции", "Лошо впечатление", "Липса на опит", "Друго"])
     sys_decline_reasons = settings_dict.get("decline_reasons", ["Започнал друга работа", "Недоволен от условията", "Друго"])
     score_categories = settings_dict.get("score_categories", ["Търговски", "Складов", "Сервизен", "Маркетингов", "Бек-офис/Управленски"])
+    ai_prompts = settings_dict.get("ai_prompts", {"recruitment_analysis": "Ти си експерт по подбор. Анализирай CV-то..."})
 
     users_res = supabase.table("users").select("username").execute()
     sys_users = sorted([u['username'] for u in users_res.data]) if users_res.data else []
@@ -440,7 +460,7 @@ def render_recruitment_module():
     global_pos_map = {p["id"]: p for p in all_global_positions}
 
     c1, c2 = st.columns([3,1])
-    c1.header("📋 Модул Подбор (V4 Enterprise)")
+    c1.header("📋 Модул Подбор (V38 Analytics-Ready)")
     with c2:
         if st.button("📅 Глобален график интервюта", use_container_width=True):
             all_int_apps = supabase.table("hr_applications").select("*, hr_candidates(*)").neq("interview_details", "null").eq("is_deleted", False).execute().data or []
@@ -507,13 +527,20 @@ def render_recruitment_module():
             st.divider()
             with st.expander("⚙️ Системни настройки (Суперадмин)"):
                 with st.form("settings_form"):
+                    st.write("📊 **Категории и Причини**")
                     nr = st.text_area("Причини за 'Отхвърлен':", value="\n".join(sys_reject_reasons))
                     nd = st.text_area("Причини за 'Отказал':", value="\n".join(sys_decline_reasons))
-                    sc = st.text_area("Области на компетентност:", value="\n".join(score_categories))
+                    sc = st.text_area("Области на компетентност (Matrix):", value="\n".join(score_categories))
+                    
+                    st.divider()
+                    st.write("🤖 **AI Инструкции (System Prompts)**")
+                    ai_rec = st.text_area("Анализ на CV (Recruitment Engine):", value=ai_prompts.get("recruitment_analysis", ""))
+                    
                     if st.form_submit_button("💾 Запиши настройките"):
                         supabase.table("hr_settings").update({"setting_value": [x.strip() for x in nr.split("\n") if x.strip()]}).eq("setting_key", "reject_reasons").execute()
                         supabase.table("hr_settings").update({"setting_value": [x.strip() for x in nd.split("\n") if x.strip()]}).eq("setting_key", "decline_reasons").execute()
                         supabase.table("hr_settings").update({"setting_value": [x.strip() for x in sc.split("\n") if x.strip()]}).eq("setting_key", "score_categories").execute()
+                        supabase.table("hr_settings").update({"setting_value": {"recruitment_analysis": ai_rec}}).eq("setting_key", "ai_prompts").execute()
                         st.success("Обновено!"); st.rerun()
         return
 
@@ -594,7 +621,10 @@ def render_recruitment_module():
                     try:
                         n, d, p = parse_jobs_zip(f)
                         c = supabase.table("hr_candidates").insert({"full_name": n, "raw_cv_data": d, "photo_thumbnail": p}).execute()
-                        if c.data: supabase.table("hr_applications").insert({"candidate_id": c.data[0]["id"], "position_id": target_pos_id, "status": "Нов"}).execute(); sc += 1
+                        if c.data: 
+                            app_res = supabase.table("hr_applications").insert({"candidate_id": c.data[0]["id"], "position_id": target_pos_id, "status": "Нов"}).execute()
+                            if app_res.data: log_status_change(app_res.data[0]["id"], "None (New)", "Нов")
+                            sc += 1
                     except: pass
                     pb.progress(int(((idx + 1) / len(files)) * 100))
                 st.success(f"Качени {sc} кандидати!"); time.sleep(1.5); st.session_state.up_key += 1; st.rerun()
