@@ -408,12 +408,6 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
 def render_recruitment_module():
     if "active_company" not in st.session_state: st.session_state.active_company = None
     if "active_campaign_id" not in st.session_state: st.session_state.active_campaign_id = None
-    
-    # Auto-open Global Dashboard if requested by Action Center
-    if st.session_state.get("force_open_global_interviews"):
-        st.session_state.force_open_global_interviews = False
-        all_int_apps = supabase.table("hr_applications").select("*, hr_candidates(*)").neq("interview_details", "null").eq("is_deleted", False).execute().data or []
-        # We need global_pos_map to open it safely, fetch below.
 
     COMPANIES = ["REN", "CIM", "MAS", "BAU", "AST", "CMX", "RXS", "SNW", "RXB", "DXM"]
     current_user = st.session_state.get("username", "Unknown")
@@ -479,7 +473,7 @@ def render_recruitment_module():
                 st.caption("Всичко е приключено. Страхотна работа!")
 
     c1, c2 = st.columns([3,1])
-    c1.header("📋 Модул Подбор (V39 Workflow Engine)")
+    c1.header("📋 Модул Подбор (V39.1 Workflow Engine)")
     with c2:
         if st.button("📅 Глобален график интервюта", use_container_width=True) or st.session_state.get("force_open_global_interviews", False):
             all_int_apps = supabase.table("hr_applications").select("*, hr_candidates(*)").neq("interview_details", "null").eq("is_deleted", False).execute().data or []
