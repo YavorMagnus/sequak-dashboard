@@ -1,19 +1,26 @@
 import streamlit as st
 import pandas as pd
 from utils import supabase, check_permission, SYSTEM_ROLES
-import zipfile
-import io
-import base64
-import fitz  # PyMuPDF
-from bs4 import BeautifulSoup
-import re
-import docx
+from parsers import parse_jobs_zip
 import time
 from datetime import datetime
 
-# --- ИНИЦИАЛИЗАЦИЯ НА СЕСИЯТА ---
+# --- ИНИЦИАЛИЗАЦИЯ НА СЕСИЯТА & DEEP LINKING ---
 if "active_company" not in st.session_state: st.session_state.active_company = None
 if "active_campaign_id" not in st.session_state: st.session_state.active_campaign_id = None
+if "force_open_global_interviews" not in st.session_state: st.session_state.force_open_global_interviews = False
+
+# Прихващане на Deep Link (URL Параметър)
+if "app_id" in st.query_params:
+    deep_app_id = st.query_params["app_id"]
+    st.query_params.clear() # Изчистваме URL-а, за да не цикли
+    try:
+        dl_res = supabase.table("hr_applications").select("position_id, hr_positions(company_name)").eq("id", deep_app_id).execute()
+        if dl_res.data:
+            st.session_state.active_company = dl_res.data[0]["hr_positions"]["company_name"]
+            st.session_state.active_campaign_id = dl_res.data[0]["position_id"]
+            st.session_state.force_open_app_id = deep_app_id
+    except: pass
 
 # Карта на емоджитата за статус
 EMOJI_MAP = {
@@ -29,9 +36,8 @@ EMOJI_MAP = {
     "Преместен": "📦"
 }
 
-# --- ПОМОЩНИ ФУНКЦИИ (ЛОГИЧЕСКИ БЛОК) ---
+# --- ПОМОЩНИ ФУНКЦИИ ---
 def log_status_change(app_id, old_status, new_status):
-    """Записва всяка промяна на статус в историческата таблица за статистики."""
     current_user = st.session_state.get("username", "Unknown")
     try:
         supabase.table("hr_status_history").insert({
@@ -40,22 +46,7 @@ def log_status_change(app_id, old_status, new_status):
             "new_status": new_status,
             "changed_by": current_user
         }).execute()
-    except:
-        pass # Не прекъсваме UX при грешка в логването
-
-def clean_html_text(html_bytes):
-    soup = BeautifulSoup(html_bytes.decode("utf-8", errors="ignore"), "html.parser")
-    for tag in soup(["script", "style", "head", "noscript", "title"]): tag.extract()
-    for label in soup.find_all("label"): label.insert_before("**"); label.insert_after("**"); label.unwrap()
-    for h5 in soup.find_all("h5"): h5.insert_before("\n\n### "); h5.insert_after("\n\n"); h5.unwrap()
-    for h6 in soup.find_all("h6"): h6.insert_before("\n\n**"); h6.insert_after("**\n"); h6.unwrap()
-    for overline in soup.find_all(class_="overline"): overline.insert_before("\n*"); overline.insert_after("*\n"); overline.unwrap()
-    for item in soup.find_all(class_="item"): item.insert_before("\n- "); item.insert_after("\n"); item.unwrap()
-    for br in soup.find_all("br"): br.replace_with("\n")
-    for block in soup.find_all(["div", "p", "tr", "li", "h1", "h2", "h3", "h4"]): block.insert_after("\n")
-    text = soup.get_text(separator=' ')
-    text = re.sub(r'[ \t]+', ' ', text)
-    return text.replace('\n', '  \n').strip()
+    except: pass
 
 def get_traffic_light_6(val):
     if val <= 2: return "🔴"
@@ -73,66 +64,18 @@ def get_pos_display_name(p):
     status_str = " 🗄️[АРХИВ]" if p.get('status') == 'Архивирана' else ""
     return f"{p['title']}{city_str}{status_str}"
 
-# --- ПАРСЪР (БЪДЕЩ МОДУЛ PARSERS.PY) ---
-def parse_jobs_zip(uploaded_file):
-    raw_name = uploaded_file.name.replace(".zip", "").replace(".ZIP", "")
-    name_no_dates = re.sub(r'_[0-9]{2}\.[0-9]{2}\.[0-9]{4}.*', '', raw_name)
-    clean_name = re.sub(r'^[0-9]+_', '', name_no_dates).replace('_', ' ').strip()
-    if not clean_name: clean_name = raw_name 
-    cv_data = {"questionnaire": "Няма прикачен въпросник.", "notes": "Няма намерени бележки.", "cv_text": "Няма намерен текст на CV."}
-    photo_base64, has_document_cv, has_legacy_doc, html_profile_text = None, False, False, ""
-    
-    with zipfile.ZipFile(uploaded_file, "r") as z:
-        for file_name in z.namelist():
-            lower_name = file_name.split('/')[-1].lower()
-            if lower_name.endswith(".url") or lower_name in ["jobs.bg", "business.jobs.bg"]: continue
-            with z.open(file_name) as f: file_bytes = f.read()
-            is_pdf = file_bytes.startswith(b"%PDF") or lower_name.endswith(".pdf")
-            is_docx = lower_name.endswith(".docx")
-            is_doc = lower_name.endswith(".doc")
-            is_html = lower_name.endswith((".html", ".htm")) or b"<html" in file_bytes[:500].lower()
-            is_img = lower_name.endswith((".jpg", ".jpeg", ".png")) or file_bytes.startswith(b"\xFF\xD8\xFF") or file_bytes.startswith(b"\x89PNG")
-            if is_doc: has_legacy_doc = True  
-            if is_img and not photo_base64: photo_base64 = base64.b64encode(file_bytes).decode("utf-8")
-            elif is_html:
-                html_str = file_bytes.decode("utf-8", errors="ignore")
-                if 'id="catForm"' in html_str or 'name="id"' in html_str: continue 
-                if 'class="cv-preview"' in html_str: html_profile_text = clean_html_text(file_bytes)
-                elif "Въпросник" in html_str or "Questionnaire" in html_str or "questionnaire" in lower_name:
-                    text_content = clean_html_text(file_bytes)
-                    idx = text_content.find("Въпросник") if text_content.find("Въпросник") != -1 else text_content.find("Questionnaire")
-                    if idx != -1: text_content = text_content[idx:]
-                    text_content = re.sub(r'\s*(\d+\.\s)', r'\n\n\1', text_content)
-                    cv_data["questionnaire"] = re.sub(r'(\?[*]?)\s+(.*)', r'\1 **\2**', text_content).replace('\n', '  \n')
-            elif is_pdf:
-                try:
-                    doc = fitz.open(stream=file_bytes, filetype="pdf")
-                    pdf_text = ""
-                    for page in doc:
-                        pdf_text += page.get_text().replace('\n', '  \n') + "\n\n"
-                        if not photo_base64:
-                            imgs = page.get_images(full=True)
-                            if imgs: photo_base64 = base64.b64encode(doc.extract_image(imgs[0][0])["image"]).decode("utf-8")
-                    cleaned_pdf_text = pdf_text.strip()
-                    if len(cleaned_pdf_text) > 50: cv_data["cv_text"] = cleaned_pdf_text; has_document_cv = True
-                except: pass
-            elif is_docx:
-                try:
-                    doc = docx.Document(io.BytesIO(file_bytes))
-                    docx_text = "\n\n".join([p.text for p in doc.paragraphs if p.text.strip()]).strip()
-                    if len(docx_text) > 50: cv_data["cv_text"] = docx_text; has_document_cv = True
-                except: pass
-    if not has_document_cv:
-        if html_profile_text: cv_data["cv_text"] = html_profile_text
-        elif has_legacy_doc: cv_data["cv_text"] = "🚨 **Внимание: Неподдържан формат (.doc)**\n\nТози кандидат е прикачил автобиография в стар формат на Word (1997-2003)..."
-    return clean_name.title(), cv_data, photo_base64
-
 # --- МОДАЛИ ---
 @st.dialog("➕ Създаване на нова кампания", width="large")
-def open_new_campaign_modal(company_name):
+def open_new_campaign_modal(company_name, sys_users):
     st.write(f"🏢 Фирма: **{company_name}**")
     with st.form("new_pos_form", clear_on_submit=True):
         t = st.text_input("Име на позицията *")
+        
+        st.write("👥 **Роли по кампанията (за Action Center)**")
+        r_col1, r_col2 = st.columns(2)
+        with r_col1: selected_owners = st.multiselect("Собственици (Мениджъри):", sys_users, help="Получават задачи за Нови, Възможни и Потвърдени интервюта.")
+        with r_col2: selected_hr = st.selectbox("HR (Установяващ контакт):", ["--- Избери ---"] + sys_users, help="Получава задачи за Установяване на контакт и Направени предложения.")
+        
         pos_method = st.selectbox("Метод за оценка", ["Числова оценка 1-6 - обективна и субективна", "AI Оценка + Профилна матрица"])
         cc1, cc2 = st.columns(2)
         with cc1: s_min = st.text_input("Мин. възнаграждение (EUR)")
@@ -147,7 +90,8 @@ def open_new_campaign_modal(company_name):
             if not t.strip():
                 st.error("⚠️ Моля, въведете име на позицията!")
             else:
-                supabase.table("hr_positions").insert({"company_name": company_name, "title": t, "evaluation_method": pos_method, "salary_min": s_min, "salary_max": s_max, "city": city, "base_location": base_loc, "work_type": w_type, "priority": priority, "status": "Активна"}).execute()
+                hr_val = selected_hr if selected_hr != "--- Избери ---" else None
+                supabase.table("hr_positions").insert({"company_name": company_name, "title": t, "evaluation_method": pos_method, "salary_min": s_min, "salary_max": s_max, "city": city, "base_location": base_loc, "work_type": w_type, "priority": priority, "status": "Активна", "owners": selected_owners, "hr_contact": hr_val}).execute()
                 st.success("✅ Кампанията е създадена успешно!")
                 time.sleep(1)
                 st.rerun()
@@ -200,7 +144,7 @@ def open_interview_dashboard(apps_data, global_pos_map=None):
 @st.dialog("📄 Картон на кандидата", width="large")
 def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_data, photo_base64, manual_score, all_global_positions, current_pos_id, created_at, interview_details, sys_reject_reasons, sys_decline_reasons, score_categories, sys_users, is_backup):
     can_evaluate = check_permission("recruitment", "evaluate")
-    current_user = st.session_state.get("username", "Y.Nikolov")
+    current_user = st.session_state.get("username", "Unknown")
     
     comments_res = supabase.table("hr_comments").select("*").eq("application_id", app_id).order("created_at").execute()
     comments = comments_res.data or []
@@ -211,6 +155,13 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
     curr_sc_active = manual_score.get("scorecard_active", False) if manual_score else False
     curr_matrix = manual_score.get("profile_matrix", {}) if manual_score else {}
     curr_sc_perc = manual_score.get("scorecard_percentage", 0) if manual_score else 0
+    
+    # Търсене на Интелигентен контекст (Last Human Comment & Meeting Request)
+    last_human_comment = None
+    meeting_request = None
+    for c in reversed(comments):
+        if "🤖 Система" not in c["author_name"] and not last_human_comment: last_human_comment = c
+        if "🟡 ЗАЯВКА ЗА СРЕЩА" in c["comment_text"] and status == "Избран за интервю" and not meeting_request: meeting_request = c
     
     col_img, col_info = st.columns([1, 4])
     with col_img:
@@ -239,7 +190,17 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
             
         transfer_notes = [c for c in comments if "🔄 Преместен" in c["comment_text"] or "🔄 Копиран" in c["comment_text"]]
         if transfer_notes: st.info(f"ℹ️ {transfer_notes[-1]['comment_text']}")
+        
         if interview_details: st.warning(f"⏰ **Интервю:** {interview_details.get('type', 'В процес на контакт')} | {interview_details.get('date')} - {interview_details.get('time')} с {interview_details.get('interviewer')}")
+        
+        # Визуализация на Интелигентен Контекст (V39)
+        if meeting_request:
+            req_text = meeting_request['comment_text'].replace('🟡 ЗАЯВКА ЗА СРЕЩА:\n', '').replace('🟡 ЗАЯВКА ЗА СРЕЩА:', '').strip()
+            st.warning(f"🎯 **Заявка за интервю от {meeting_request['author_name']}**:\n{req_text}")
+        
+        if last_human_comment:
+            trunc_txt = last_human_comment['comment_text'][:120] + "..." if len(last_human_comment['comment_text']) > 120 else last_human_comment['comment_text']
+            st.markdown(f"<div style='font-size: 0.85em; color: #aaa; margin-top: 5px; padding-left: 10px; border-left: 2px solid #555;'>💬 <b>{last_human_comment['author_name']}:</b> {trunc_txt}</div>", unsafe_allow_html=True)
 
     st.divider()
     
@@ -302,9 +263,14 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
                 
         with col3: 
             with st.popover("✉️ Сподели", use_container_width=True):
-                st.write("Маркирайте текста по-долу, копирайте и поставете във вашия имейл клиент:")
                 curr_title = next(p["title"] for p in all_global_positions if p["id"] == current_pos_id)
-                st.markdown(f"""<div style="font-family: Arial, sans-serif; padding: 15px; border: 1px solid #ddd; border-radius: 8px; background-color: #f9f9f9; color: #333;"><h3 style="margin-top: 0; color: #0056b3;">Кандидат: {candidate_name}</h3><p><strong>Позиция:</strong> {curr_title}</p><p><strong>Текущ статус:</strong> <span style="background-color: #e2e3e5; padding: 3px 8px; border-radius: 4px;">{status}</span></p></div>""", unsafe_allow_html=True)
+                share_url = f"https://sequak-dashboard.streamlit.app/?app_id={app_id}"
+                
+                st.write("Маркирайте текста по-долу, копирайте и поставете във вашия имейл клиент:")
+                st.markdown(f"""<div style="font-family: Arial, sans-serif; padding: 15px; border: 1px solid #ddd; border-radius: 8px; background-color: #f9f9f9; color: #333;"><h3 style="margin-top: 0; color: #0056b3;">Кандидат: {candidate_name}</h3><p><strong>Позиция:</strong> {curr_title}</p><p><strong>Текущ статус:</strong> <span style="background-color: #e2e3e5; padding: 3px 8px; border-radius: 4px;">{status}</span></p><br><a href="{share_url}" target="_blank" style="display: inline-block; padding: 8px 12px; background-color: #0056b3; color: white; text-decoration: none; border-radius: 5px;">🔗 Отвори картона в Sequak</a></div>""", unsafe_allow_html=True)
+                
+                st.divider()
+                st.text_input("Директен линк (За Viber/Teams):", value=share_url, help="Копирай и изпрати за незабавно пререждане на опашката.")
                 
         with col4:
             if check_permission("recruitment", "soft_delete"):
@@ -442,8 +408,15 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
 def render_recruitment_module():
     if "active_company" not in st.session_state: st.session_state.active_company = None
     if "active_campaign_id" not in st.session_state: st.session_state.active_campaign_id = None
+    
+    # Auto-open Global Dashboard if requested by Action Center
+    if st.session_state.get("force_open_global_interviews"):
+        st.session_state.force_open_global_interviews = False
+        all_int_apps = supabase.table("hr_applications").select("*, hr_candidates(*)").neq("interview_details", "null").eq("is_deleted", False).execute().data or []
+        # We need global_pos_map to open it safely, fetch below.
 
     COMPANIES = ["REN", "CIM", "MAS", "BAU", "AST", "CMX", "RXS", "SNW", "RXB", "DXM"]
+    current_user = st.session_state.get("username", "Unknown")
     
     settings_res = supabase.table("hr_settings").select("*").execute()
     settings_dict = {row["setting_key"]: row["setting_value"] for row in settings_res.data} if settings_res.data else {}
@@ -459,12 +432,59 @@ def render_recruitment_module():
     all_global_positions = all_pos_res.data if all_pos_res.data else []
     global_pos_map = {p["id"]: p for p in all_global_positions}
 
+    # --- ACTION CENTER (Сайдбар Инбокс) ---
+    watched_statuses = ["Нов", "Установи контакт", "Възможно интервю", "Избран за интервю", "Потвърдено интервю", "Направено предложение"]
+    active_apps = supabase.table("hr_applications").select("position_id, status").eq("is_deleted", False).in_("status", watched_statuses).execute().data or []
+    
+    tasks = []
+    for pos in all_global_positions:
+        if pos.get("status") == "Архивирана": continue
+        
+        pos_owners = pos.get("owners", []) or []
+        hr_contact = pos.get("hr_contact", "")
+        is_owner = current_user in pos_owners
+        is_hr = (current_user == hr_contact)
+        
+        pos_apps = [a for a in active_apps if a["position_id"] == pos["id"]]
+        if not pos_apps: continue
+        
+        counts = {s: sum(1 for a in pos_apps if a["status"] == s) for s in watched_statuses}
+        
+        if is_owner:
+            if counts["Нов"] > 0: tasks.append({"text": f"Нови кандидати: {counts['Нов']}", "pos": pos, "action": "Нов"})
+            if counts["Възможно интервю"] > 0: tasks.append({"text": f"За решение (Възможно интервю): {counts['Възможно интервю']}", "pos": pos, "action": "Възможно интервю"})
+            if counts["Потвърдено интервю"] > 0: tasks.append({"text": f"Потвърдени интервюта: {counts['Потвърдено интервю']}", "pos": pos, "action": "GlobalInterview"})
+            
+        if is_hr:
+            if counts["Установи контакт"] > 0: tasks.append({"text": f"За обаждане (Установи контакт): {counts['Установи контакт']}", "pos": pos, "action": "Установи контакт"})
+            if counts["Избран за интервю"] > 0: tasks.append({"text": f"Заявено интервю от мениджър: {counts['Избран за интервю']}", "pos": pos, "action": "Избран за интервю"})
+            if counts["Направено предложение"] > 0: tasks.append({"text": f"Направени предложения: {counts['Направено предложение']}", "pos": pos, "action": "Направено предложение"})
+
+    with st.sidebar:
+        if tasks:
+            with st.expander(f"📬 Активни задачи ({len(tasks)})", expanded=True):
+                for i, task in enumerate(tasks):
+                    st.markdown(f"**{task['pos']['title']}** ({task['pos']['company_name']})<br><span style='font-size:0.85em;'>{task['text']}</span>", unsafe_allow_html=True)
+                    if st.button("➡️ Към обявата", key=f"btn_task_{i}", use_container_width=True):
+                        st.session_state.active_company = task['pos']['company_name']
+                        st.session_state.active_campaign_id = task['pos']['id']
+                        if task['action'] == "GlobalInterview":
+                            st.session_state.force_open_global_interviews = True
+                        else:
+                            st.session_state.force_status_filter = task['action']
+                        st.rerun()
+                    st.divider()
+        else:
+            with st.expander("📭 Нямаш нови задачи"):
+                st.caption("Всичко е приключено. Страхотна работа!")
+
     c1, c2 = st.columns([3,1])
-    c1.header("📋 Модул Подбор (V38 Analytics-Ready)")
+    c1.header("📋 Модул Подбор (V39 Workflow Engine)")
     with c2:
-        if st.button("📅 Глобален график интервюта", use_container_width=True):
+        if st.button("📅 Глобален график интервюта", use_container_width=True) or st.session_state.get("force_open_global_interviews", False):
             all_int_apps = supabase.table("hr_applications").select("*, hr_candidates(*)").neq("interview_details", "null").eq("is_deleted", False).execute().data or []
             open_interview_dashboard(all_int_apps, global_pos_map)
+            if st.session_state.get("force_open_global_interviews"): st.session_state.force_open_global_interviews = False
 
     selected_nav = st.pills("Навигация", ["🌍 Дашборд"] + COMPANIES, default=st.session_state.active_company if st.session_state.active_company else "🌍 Дашборд")
     if selected_nav == "🌍 Дашборд":
@@ -555,7 +575,7 @@ def render_recruitment_module():
     if not st.session_state.active_campaign_id:
         st.warning("Няма кампании в тази фирма.")
         if check_permission("recruitment", "manage_positions"):
-            if st.button("➕ Създай първа кампания"): open_new_campaign_modal(st.session_state.active_company)
+            if st.button("➕ Създай първа кампания"): open_new_campaign_modal(st.session_state.active_company, sys_users)
         return
 
     c_camp1, c_camp2 = st.columns([5, 1])
@@ -568,7 +588,7 @@ def render_recruitment_module():
     with c_camp2:
         st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
         if check_permission("recruitment", "manage_positions") and st.button("➕ Създай кампания", use_container_width=True):
-            open_new_campaign_modal(st.session_state.active_company)
+            open_new_campaign_modal(st.session_state.active_company, sys_users)
 
     target_pos_id = st.session_state.active_campaign_id
     pos_info = next((p for p in current_company_positions if p["id"] == target_pos_id), {})
@@ -578,6 +598,14 @@ def render_recruitment_module():
         with st.expander("⚙️ Управление на обявата", expanded=False):
             st.write("📝 **Редакция на параметри**")
             with st.form("edit_pos_form"):
+                st.write("👥 **Роли (Action Center)**")
+                r_col1, r_col2 = st.columns(2)
+                curr_owners = pos_info.get("owners", []) or []
+                curr_hr = pos_info.get("hr_contact", "")
+                with r_col1: e_owners = st.multiselect("Собственици (Мениджъри):", sys_users, default=[o for o in curr_owners if o in sys_users])
+                with r_col2: e_hr = st.selectbox("HR (Установяващ контакт):", ["--- Избери ---"] + sys_users, index=(sys_users.index(curr_hr)+1) if curr_hr in sys_users else 0)
+                
+                st.divider()
                 e_c1, e_c2 = st.columns(2)
                 with e_c1: e_s_min = st.text_input("Мин. възнаграждение (EUR)", value=pos_info.get("salary_min", ""))
                 with e_c1: e_s_max = st.text_input("Макс. възнаграждение (EUR)", value=pos_info.get("salary_max", ""))
@@ -589,7 +617,8 @@ def render_recruitment_module():
                 e_priority = st.selectbox("Приоритет (Спешност)", pri_opts, index=pri_opts.index(pos_info.get("priority", "Нормално")) if pos_info.get("priority") in pri_opts else 1)
                 
                 if st.form_submit_button("💾 Запиши промените"):
-                    supabase.table("hr_positions").update({"salary_min": e_s_min, "salary_max": e_s_max, "city": e_city, "base_location": e_base, "work_type": e_w_type, "priority": e_priority}).eq("id", target_pos_id).execute()
+                    hr_val = e_hr if e_hr != "--- Избери ---" else None
+                    supabase.table("hr_positions").update({"salary_min": e_s_min, "salary_max": e_s_max, "city": e_city, "base_location": e_base, "work_type": e_w_type, "priority": e_priority, "owners": e_owners, "hr_contact": hr_val}).eq("id", target_pos_id).execute()
                     st.success("Параметрите са обновени успешно!")
                     time.sleep(1); st.rerun()
             
@@ -647,7 +676,14 @@ def render_recruitment_module():
     
     c_f1, c_f2 = st.columns([3, 1])
     KANBAN_STATUSES = ["Всички", "Нов", "Установи контакт", "В процес на контакт", "Възможно интервю", "Избран за интервю", "Потвърдено интервю", "Направено предложение", "Отхвърлен", "Отказал", "Преместен"]
-    with c_f1: status_filter = st.pills("Филтър:", KANBAN_STATUSES, default="Всички")
+    
+    # Логика за Action Center филтър
+    default_stat = "Всички"
+    if "force_status_filter" in st.session_state:
+        default_stat = st.session_state.force_status_filter
+        del st.session_state.force_status_filter
+
+    with c_f1: status_filter = st.pills("Филтър:", KANBAN_STATUSES, default=default_stat)
     with c_f2:
         sort_order = st.selectbox("Сортиране:", ["Най-нови", "Субективна оценка (1-6)", "% по Скор-карта"], label_visibility="collapsed")
         show_backups = st.checkbox("❓ Само Резерви", value=False)
