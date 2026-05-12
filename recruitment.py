@@ -264,7 +264,6 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
         with col3: 
             with st.popover("✉️ Сподели", use_container_width=True):
                 curr_title = next(p["title"] for p in all_global_positions if p["id"] == current_pos_id)
-                # ПРАВИЛНИЯТ URL АДРЕС (V39.2 FIX)
                 share_url = f"https://yavormagnus-sequak-dashboard-main-xhjn3h.streamlit.app/?app_id={app_id}"
                 
                 st.write("Маркирайте текста по-долу, копирайте и поставете във вашия имейл клиент:")
@@ -474,7 +473,7 @@ def render_recruitment_module():
                 st.caption("Всичко е приключено. Страхотна работа!")
 
     c1, c2 = st.columns([3,1])
-    c1.header("📋 Модул Подбор (V39.2 Deep Link Fix)")
+    c1.header("📋 Модул Подбор (V39.3 Fix)")
     with c2:
         if st.button("📅 Глобален график интервюта", use_container_width=True) or st.session_state.get("force_open_global_interviews", False):
             all_int_apps = supabase.table("hr_applications").select("*, hr_candidates(*)").neq("interview_details", "null").eq("is_deleted", False).execute().data or []
@@ -605,7 +604,7 @@ def render_recruitment_module():
                 with e_c1: e_s_min = st.text_input("Мин. възнаграждение (EUR)", value=pos_info.get("salary_min", ""))
                 with e_c1: e_s_max = st.text_input("Макс. възнаграждение (EUR)", value=pos_info.get("salary_max", ""))
                 with e_c2: e_city = st.text_input("Град", value=pos_info.get("city", ""))
-                with e_base = st.text_input("База (незадължително)", value=pos_info.get("base_location", ""))
+                with e_c2: e_base = st.text_input("База (незадължително)", value=pos_info.get("base_location", ""))
                 wt_opts = ["Присъствено", "Хибрид", "Remote"]
                 e_w_type = st.selectbox("Тип работа", wt_opts, index=wt_opts.index(pos_info.get("work_type", "Присъствено")) if pos_info.get("work_type") in wt_opts else 0)
                 pri_opts = ["Оглеждаме се", "Нормално", "Спешно", "🔥 ПОЖАР"]
