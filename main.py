@@ -122,7 +122,12 @@ if not available_pages:
     st.sidebar.warning("Нямате права за достъп до нито един модул.")
     page = None
 else:
-    page = st.sidebar.radio("Изберете модул:", available_pages)
+    # --- МАГИЯТА ЗА ДИРЕКТНИТЕ ЛИНКОВЕ (PORTIER OVERRIDE) ---
+    default_index = 0
+    if "app_id" in st.query_params and "🎯 Рекрутмънт и Подбор" in available_pages:
+        default_index = available_pages.index("🎯 Рекрутмънт и Подбор")
+        
+    page = st.sidebar.radio("Изберете модул:", available_pages, index=default_index)
 
 st.sidebar.markdown("---")
 st.sidebar.write(f"👤 **Профил:** {st.session_state.username}")
