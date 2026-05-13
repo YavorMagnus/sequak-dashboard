@@ -527,7 +527,7 @@ def render_recruitment_module():
                     cands = [parse_jobs_zip(f)] if f.name.lower().endswith(".zip") else parse_spreadsheet(f)
                     for n, d, p in cands:
                         email, phone = d.get("email"), d.get("phone")
-                        q = supabase.table("hr_applications").select("id").eq("position_id", selected_pos_id).eq("is_deleted", False)
+                        q = supabase.table("hr_applications").select("id, hr_candidates!inner(id)").eq("position_id", selected_pos_id).eq("is_deleted", False)
                         
                         if email: 
                             q = q.eq("hr_candidates.raw_cv_data->>email", email)
