@@ -187,7 +187,7 @@ def open_interview_dashboard(apps_data, global_pos_map=None):
                     st.rerun()
     else: 
         st.warning("Няма интервюта от този тип за избрания колега.")
-@st.dialog("📄 Картон на кандидата", width="large")
+        @st.dialog("📄 Картон на кандидата", width="large")
 def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_data, photo_base64, manual_score, all_global_positions_raw, all_active_positions, current_pos_id, created_at, interview_details, sys_reject_reasons, sys_decline_reasons, score_categories, sys_users, is_backup):
     can_evaluate = check_permission("recruitment", "evaluate")
     can_soft_delete = check_permission("recruitment", "soft_delete")
@@ -391,8 +391,7 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
             supabase.table("hr_applications").update({"manual_score": {"subjective_rating": new_sub}}).eq("id", app_id).execute()
             st.session_state.force_open_app_id = app_id
             st.rerun()
-
-# --- ОСНОВЕН РЕНДЕР ---
+                # --- ОСНОВЕН РЕНДЕР ---
 def render_recruitment_module():
     if "active_company" not in st.session_state: 
         st.session_state.active_company = None
@@ -459,7 +458,7 @@ def render_recruitment_module():
                         st.rerun()
 
     c1, c2 = st.columns([3,1])
-    c1.header("📋 Модул Подбор (V40.3 Final)")
+    c1.header("📋 Модул Подбор (V40.4 Clean)")
     with c2:
         if st.button("📅 Глобален график", use_container_width=True):
             all_int_apps = supabase.table("hr_applications").select("*, hr_candidates(*)").neq("interview_details", "null").eq("is_deleted", False).execute().data or []
@@ -487,27 +486,33 @@ def render_recruitment_module():
                 t1, t2 = st.tabs(["Кандидати", "Кампании"])
                 with t1:
                     deleted_apps = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("is_deleted", True).execute().data or []
-                    for d_app in deleted_apps:
-                        col_tx, col_b1, col_b2 = st.columns([4, 1, 1])
-                        col_tx.write(f"👤 {d_app['hr_candidates']['full_name']}")
-                        if col_b1.button("♻️", key=f"r_app_{d_app['id']}", help="Възстанови"):
-                            supabase.table("hr_applications").update({"is_deleted": False}).eq("id", d_app['id']).execute()
-                            st.rerun()
-                        if col_b2.button("❌", key=f"h_app_{d_app['id']}", help="Хард Делийт"):
-                            supabase.table("hr_applications").delete().eq("id", d_app['id']).execute()
-                            st.rerun()
+                    if deleted_apps:
+                        for d_app in deleted_apps:
+                            col_tx, col_b1, col_b2 = st.columns([4, 1, 1])
+                            col_tx.write(f"👤 {d_app['hr_candidates']['full_name']}")
+                            if col_b1.button("♻️", key=f"r_app_{d_app['id']}", help="Възстанови"):
+                                supabase.table("hr_applications").update({"is_deleted": False}).eq("id", d_app['id']).execute()
+                                st.rerun()
+                            if col_b2.button("❌", key=f"h_app_{d_app['id']}", help="Хард Делийт"):
+                                supabase.table("hr_applications").delete().eq("id", d_app['id']).execute()
+                                st.rerun()
+                    else:
+                        st.success("Няма изтрити кандидати.")
                 with t2:
-                    for d_pos in deleted_positions:
-                        col_tx, col_b1, col_b2 = st.columns([4, 1, 1])
-                        col_tx.write(f"📁 {d_pos['title']} ({d_pos['company_name']})")
-                        if col_b1.button("♻️", key=f"r_pos_{d_pos['id']}", help="Възстанови"):
-                            supabase.table("hr_positions").update({"is_deleted": False}).eq("id", d_pos['id']).execute()
-                            supabase.table("hr_applications").update({"is_deleted": False}).eq("position_id", d_pos['id']).execute()
-                            st.rerun()
-                        if col_b2.button("❌", key=f"h_pos_{d_pos['id']}", help="Хард Делийт"):
-                            supabase.table("hr_applications").delete().eq("position_id", d_pos['id']).execute()
-                            supabase.table("hr_positions").delete().eq("id", d_pos['id']).execute()
-                            st.rerun()
+                    if deleted_positions:
+                        for d_pos in deleted_positions:
+                            col_tx, col_b1, col_b2 = st.columns([4, 1, 1])
+                            col_tx.write(f"📁 {d_pos['title']} ({d_pos['company_name']})")
+                            if col_b1.button("♻️", key=f"r_pos_{d_pos['id']}", help="Възстанови"):
+                                supabase.table("hr_positions").update({"is_deleted": False}).eq("id", d_pos['id']).execute()
+                                supabase.table("hr_applications").update({"is_deleted": False}).eq("position_id", d_pos['id']).execute()
+                                st.rerun()
+                            if col_b2.button("❌", key=f"h_pos_{d_pos['id']}", help="Хард Делийт"):
+                                supabase.table("hr_applications").delete().eq("position_id", d_pos['id']).execute()
+                                supabase.table("hr_positions").delete().eq("id", d_pos['id']).execute()
+                                st.rerun()
+                    else:
+                        st.success("Няма изтрити кампании.")
         return
 
     st.session_state.active_company = selected_nav
@@ -577,7 +582,9 @@ def render_recruitment_module():
                 st.rerun()
 
     st.divider()
-apps_raw = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("position_id", selected_pos_id).eq("is_deleted", False).execute().data or []
+    
+    # ИЗВЛИЧАНЕ НА КАНДИДАТИ ЗА КАМПАНИЯТА
+    apps_raw = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("position_id", selected_pos_id).eq("is_deleted", False).execute().data or []
     
     # ТЪРСАЧКА
     search_query = st.text_input("🔍 Търси (Име, CV, Бележки, Тел, Мейл)...")
