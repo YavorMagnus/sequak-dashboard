@@ -577,8 +577,56 @@ def render_recruitment_module():
                 st.rerun()
 
     st.divider()
-    apps = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("position_id", selected_pos_id).eq("is_deleted", False).execute().data or []
+apps_raw = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("position_id", selected_pos_id).eq("is_deleted", False).execute().data or []
     
+    # ТЪРСАЧКА
+    search_query = st.text_input("🔍 Търси (Име, CV, Бележки, Тел, Мейл)...")
+    if search_query:
+        sq = search_query.lower()
+        filtered_apps = []
+        for a in apps_raw:
+            c_name = a["hr_candidates"]["full_name"].lower()
+            cv_dict = a["hr_candidates"].get("raw_cv_data", {})
+            cv_text = cv_dict.get("cv_text", "").lower()
+            q_text = cv_dict.get("questionnaire", "").lower()
+            phone = cv_dict.get("phone", "").lower()
+            email = cv_dict.get("email", "").lower()
+            
+            notes_res = supabase.table("hr_comments").select("comment_text").eq("application_id", a["id"]).execute()
+            notes = " ".join([cm["comment_text"] for cm in notes_res.data]).lower() if notes_res.data else ""
+            
+            if sq in c_name or sq in cv_text or sq in q_text or sq in notes or sq in phone or sq in email: 
+                filtered_apps.append(a)
+        apps_raw = filtered_apps
+    
+    c_f1, c_f2 = st.columns([3, 1])
+    KANBAN_STATUSES = ["Всички", "Нов", "Установи контакт", "В процес на контакт", "Възможно интервю", "Избран за интервю", "Потвърдено интервю", "Направено предложение", "Отхвърлен", "Отказал", "Преместен"]
+    
+    default_stat = "Всички"
+    if "force_status_filter" in st.session_state:
+        default_stat = st.session_state.force_status_filter
+        del st.session_state.force_status_filter
+
+    with c_f1: 
+        status_filter = st.pills("Филтър:", KANBAN_STATUSES, default=default_stat)
+    with c_f2:
+        sort_order = st.selectbox("Сортиране:", ["Най-нови", "Субективна оценка (1-6)", "% по Скор-карта"], label_visibility="collapsed")
+        show_backups = st.checkbox("❓ Само Резерви", value=False)
+            
+    if status_filter != "Всички": 
+        apps_raw = [a for a in apps_raw if a["status"] == status_filter]
+    if show_backups: 
+        apps_raw = [a for a in apps_raw if a.get("is_backup") == True]
+    
+    if sort_order == "Субективна оценка (1-6)": 
+        apps_raw.sort(key=lambda x: int(x.get("manual_score", {}).get("subjective_rating", 0)) if isinstance(x.get("manual_score"), dict) else 0, reverse=True)
+    elif sort_order == "% по Скор-карта": 
+        apps_raw.sort(key=lambda x: int(x.get("manual_score", {}).get("scorecard_percentage", 0)) if isinstance(x.get("manual_score"), dict) else 0, reverse=True)
+    else: 
+        apps_raw.sort(key=lambda x: x["created_at"], reverse=True)
+        
+    apps = apps_raw
+
     if apps:
         cols = st.columns(4)
         for i, app in enumerate(apps):
