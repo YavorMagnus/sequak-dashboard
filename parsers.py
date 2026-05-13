@@ -5,6 +5,7 @@ import fitz  # PyMuPDF
 from bs4 import BeautifulSoup
 import re
 import docx
+import pandas as pd
 
 def clean_html_text(html_bytes):
     soup = BeautifulSoup(html_bytes.decode("utf-8", errors="ignore"), "html.parser")
@@ -72,3 +73,81 @@ def parse_jobs_zip(uploaded_file):
         if html_profile_text: cv_data["cv_text"] = html_profile_text
         elif has_legacy_doc: cv_data["cv_text"] = "🚨 **Внимание: Неподдържан формат (.doc)**\n\nТози кандидат е прикачил автобиография в стар формат на Word (1997-2003)..."
     return clean_name.title(), cv_data, photo_base64
+
+def parse_spreadsheet(uploaded_file):
+    """
+    Универсален парсър за Excel (.xls, .xlsx) и CSV файлове от Facebook/Social Media.
+    Не разчита на твърди имена на колони.
+    Връща списък от кортежи: [(Име, cv_data_dict, photo_base64), ...]
+    """
+    filename = uploaded_file.name.lower()
+    try:
+        if filename.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
+    except Exception as e:
+        return []
+
+    # Почистване на празни стойности
+    df = df.fillna("")
+    candidates = []
+
+    # Ключови думи за евристично разпознаване
+    name_kw = ['име', 'name', 'full name', 'първо име', 'фамилия', 'last name', 'first name']
+    phone_kw = ['тел', 'phone', 'mobile']
+    email_kw = ['mail', 'мейл', 'поща', 'e-mail']
+
+    for index, row in df.iterrows():
+        c_name = ""
+        c_phone = ""
+        c_email = ""
+        fname = ""
+        lname = ""
+        
+        questionnaire_lines = []
+        
+        for col in df.columns:
+            val = str(row[col]).strip()
+            if not val:
+                continue
+                
+            col_lower = str(col).lower()
+            
+            # Търсене на основни данни
+            if not c_phone and any(k in col_lower for k in phone_kw):
+                c_phone = val
+            elif not c_email and any(k in col_lower for k in email_kw):
+                c_email = val
+            elif any(k in col_lower for k in name_kw):
+                if 'first' in col_lower or 'първо' in col_lower:
+                    fname = val
+                elif 'last' in col_lower or 'фамилия' in col_lower:
+                    lname = val
+                elif not c_name:
+                    c_name = val
+                    
+            # Добавяне на всичко към въпросника
+            questionnaire_lines.append(f"**{col}:**\n{val}")
+        
+        # Сглобяване на името
+        if not c_name:
+            if fname or lname:
+                c_name = f"{fname} {lname}".strip()
+            else:
+                c_name = f"Кандидат от {uploaded_file.name}"
+                
+        questionnaire_text = "\n\n".join(questionnaire_lines)
+        
+        cv_data = {
+            "questionnaire": questionnaire_text,
+            "notes": "Кандидат от социални мрежи (Ексел импорт).",
+            "cv_text": "🚨 **Няма класическо CV.**\n\nТози кандидат е импортиран от таблица/социални мрежи. Моля, прегледайте данните в таб **Въпросник**.",
+            "phone": c_phone,
+            "email": c_email
+        }
+        
+        # Връщаме същия формат като ZIP парсъра: (Name, Data, Photo)
+        candidates.append((c_name.title(), cv_data, None))
+        
+    return candidates
