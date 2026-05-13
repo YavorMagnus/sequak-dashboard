@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from utils import supabase, check_permission, SYSTEM_ROLES
-from parsers import parse_jobs_zip
+from parsers import parse_jobs_zip, parse_spreadsheet
 import time
 from datetime import datetime
 
@@ -397,7 +397,7 @@ def render_recruitment_module():
     if "active_company" not in st.session_state: st.session_state.active_company = None
     if "active_campaign_id" not in st.session_state: st.session_state.active_campaign_id = None
 
-    # --- DEEP LINKING LOGIC (ПРЕМЕСТЕНА ТУК ЗА V39.4) ---
+    # --- DEEP LINKING LOGIC (V39.4) ---
     if "app_id" in st.query_params:
         deep_app_id = st.query_params["app_id"]
         st.query_params.clear() # Изчистваме URL-а, за да не цикли
@@ -474,7 +474,7 @@ def render_recruitment_module():
                 st.caption("Всичко е приключено. Страхотна работа!")
 
     c1, c2 = st.columns([3,1])
-    c1.header("📋 Модул Подбор (V39.4 Fix)")
+    c1.header("📋 Модул Подбор (V40 Data Engine)")
     with c2:
         if st.button("📅 Глобален график интервюта", use_container_width=True) or st.session_state.get("force_open_global_interviews", False):
             all_int_apps = supabase.table("hr_applications").select("*, hr_candidates(*)").neq("interview_details", "null").eq("is_deleted", False).execute().data or []
@@ -636,37 +636,77 @@ def render_recruitment_module():
                     st.session_state.active_campaign_id = None; st.rerun()
 
     if not is_archived and check_permission("recruitment", "upload_candidates"):
-        with st.expander(f"📥 Импорт към '{pos_info['title']}'"):
+        with st.expander(f"📥 Импорт към '{pos_info['title']}' (ZIP, Excel, CSV)"):
             if "up_key" not in st.session_state: st.session_state.up_key = 0
-            files = st.file_uploader("ZIP архиви", type="zip", accept_multiple_files=True, key=f"up_{st.session_state.up_key}")
+            files = st.file_uploader("ZIP или Таблични файлове", type=["zip", "xlsx", "xls", "csv"], accept_multiple_files=True, key=f"up_{st.session_state.up_key}")
+            
             if files and st.button("▶️ Старт импорт", type="primary"):
-                pb = st.progress(0); sc = 0
+                pb = st.progress(0); sc = 0; dc = 0
+                total_files = len(files)
+                
                 for idx, f in enumerate(files):
-                    try:
-                        n, d, p = parse_jobs_zip(f)
-                        c = supabase.table("hr_candidates").insert({"full_name": n, "raw_cv_data": d, "photo_thumbnail": p}).execute()
-                        if c.data: 
-                            app_res = supabase.table("hr_applications").insert({"candidate_id": c.data[0]["id"], "position_id": target_pos_id, "status": "Нов"}).execute()
-                            if app_res.data: log_status_change(app_res.data[0]["id"], "None (New)", "Нов")
-                            sc += 1
-                    except: pass
-                    pb.progress(int(((idx + 1) / len(files)) * 100))
-                st.success(f"Качени {sc} кандидати!"); time.sleep(1.5); st.session_state.up_key += 1; st.rerun()
+                    fname_lower = f.name.lower()
+                    
+                    # Избор на парсър спрямо файла
+                    if fname_lower.endswith(".zip"):
+                        candidates = [parse_jobs_zip(f)]
+                    else:
+                        candidates = parse_spreadsheet(f)
+                        
+                    for n, d, p in candidates:
+                        # 🚫 ПРОВЕРКА ЗА ДУБЛИКАТИ (По Телефон или Мейл)
+                        email = d.get("email")
+                        phone = d.get("phone")
+                        is_duplicate = False
+                        
+                        if email or phone:
+                            # Проверяваме дали този контакт вече има апликация за ТАЗИ кампания
+                            query = supabase.table("hr_applications").select("id, hr_candidates!inner(id)").eq("position_id", target_pos_id).eq("is_deleted", False)
+                            if email: query = query.eq("hr_candidates.raw_cv_data->>email", email)
+                            if phone: query = query.eq("hr_candidates.raw_cv_data->>phone", phone)
+                            
+                            dup_check = query.execute()
+                            if dup_check.data: is_duplicate = True
+                        
+                        if is_duplicate:
+                            dc += 1; continue
+                            
+                        try:
+                            # Създаване на кандидата
+                            c = supabase.table("hr_candidates").insert({"full_name": n, "raw_cv_data": d, "photo_thumbnail": p}).execute()
+                            if c.data: 
+                                app_res = supabase.table("hr_applications").insert({"candidate_id": c.data[0]["id"], "position_id": target_pos_id, "status": "Нов"}).execute()
+                                if app_res.data: log_status_change(app_res.data[0]["id"], "None (New)", "Нов")
+                                sc += 1
+                        except: pass
+                        
+                    pb.progress(int(((idx + 1) / total_files) * 100))
+                
+                status_msg = f"✅ Качени {sc} нови кандидати."
+                if dc > 0: status_msg += f" ⚠️ {dc} дубликата са прескочени."
+                st.success(status_msg); time.sleep(2); st.session_state.up_key += 1; st.rerun()
 
     st.divider()
     apps_raw = supabase.table("hr_applications").select("*, hr_candidates(*), hr_comments(count)").eq("position_id", target_pos_id).eq("is_deleted", False).execute().data or []
     
     # ТЪРСАЧКА
-    search_query = st.text_input("🔍 Търси (Име, CV, Бележки)...")
+    search_query = st.text_input("🔍 Търси (Име, CV, Бележки, Тел, Мейл)...")
     if search_query:
         sq = search_query.lower()
         filtered_apps = []
         for a in apps_raw:
             c_name = a["hr_candidates"]["full_name"].lower()
-            cv_text = a["hr_candidates"].get("raw_cv_data", {}).get("cv_text", "").lower()
+            cv_dict = a["hr_candidates"].get("raw_cv_data", {})
+            cv_text = cv_dict.get("cv_text", "").lower()
+            q_text = cv_dict.get("questionnaire", "").lower()
+            phone = cv_dict.get("phone", "").lower()
+            email = cv_dict.get("email", "").lower()
+            
             notes_res = supabase.table("hr_comments").select("comment_text").eq("application_id", a["id"]).execute()
             notes = " ".join([cm["comment_text"] for cm in notes_res.data]).lower() if notes_res.data else ""
-            if sq in c_name or sq in cv_text or sq in notes: filtered_apps.append(a)
+            
+            if sq in c_name or sq in cv_text or sq in q_text or sq in notes or sq in phone or sq in email: 
+                filtered_apps.append(a)
         apps_raw = filtered_apps
     
     c_f1, c_f2 = st.columns([3, 1])
