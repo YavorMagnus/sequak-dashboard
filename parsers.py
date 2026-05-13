@@ -87,10 +87,19 @@ def parse_spreadsheet(uploaded_file):
     df = df.fillna("")
     candidates = []
 
-    # Системни колони от FB, които не ни трябват във въпросника
-    ignore_cols = ["id", "ad_id", "ad_name", "adset_id", "adset_name", "campaign_id", "campaign_name", "form_id", "form_name", "is_organic", "platform", "created_time"]
+    # Системни колони от FB, които не ни трябват във въпросника и пречат на имената
+    ignore_cols = ["id", "ad_id", "ad_name", "adset_id", "adset_name", "campaign_id", "campaign_name", "form_id", "form_name", "is_organic", "platform", "created_time", "lead_status"]
 
     for index, row in df.iterrows():
+        # 1. ПРОВЕРКА ЗА ТЕСТОВ ЛИЙД: Ако видим '<test lead', директно убиваме реда
+        is_dummy = False
+        for col in df.columns:
+            if "<test lead" in str(row[col]).lower():
+                is_dummy = True
+                break
+        if is_dummy:
+            continue
+
         c_name, c_phone, c_email, fname, lname = "", "", "", "", ""
         questionnaire_lines = []
         
@@ -106,18 +115,19 @@ def parse_spreadsheet(uploaded_file):
             if col_lower.startswith("unnamed"):
                 col_str = "Допълнителна информация"
 
-            # Извличане на данни
-            if not c_email and ("mail" in col_lower or "поща" in col_lower):
-                c_email = val
-            elif not c_phone and ("phone" in col_lower or "тел" in col_lower or "mobile" in col_lower):
-                c_phone = val
-            elif "name" in col_lower or "име" in col_lower or "фамилия" in col_lower:
-                if "first" in col_lower or "първо" in col_lower:
-                    fname = val
-                elif "last" in col_lower or "фамилия" in col_lower:
-                    lname = val
-                elif not c_name:
-                    c_name = val
+            # Извличане на данни (Търсим само ако колоната не е в игнорираните)
+            if col_lower not in ignore_cols:
+                if not c_email and ("mail" in col_lower or "поща" in col_lower):
+                    c_email = val
+                elif not c_phone and ("phone" in col_lower or "тел" in col_lower or "mobile" in col_lower):
+                    c_phone = val
+                elif "name" in col_lower or "име" in col_lower or "фамилия" in col_lower:
+                    if "first" in col_lower or "първо" in col_lower:
+                        fname = val
+                    elif "last" in col_lower or "фамилия" in col_lower:
+                        lname = val
+                    elif not c_name:
+                        c_name = val
 
             # Добавяне към въпросника (ако не е системен FB боклук)
             if col_lower not in ignore_cols:
