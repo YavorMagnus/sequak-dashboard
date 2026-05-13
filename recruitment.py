@@ -187,7 +187,7 @@ def open_interview_dashboard(apps_data, global_pos_map=None):
                     st.rerun()
     else: 
         st.warning("Няма интервюта от този тип за избрания колега.")
-        @st.dialog("📄 Картон на кандидата", width="large")
+@st.dialog("📄 Картон на кандидата", width="large")
 def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_data, photo_base64, manual_score, all_global_positions_raw, all_active_positions, current_pos_id, created_at, interview_details, sys_reject_reasons, sys_decline_reasons, score_categories, sys_users, is_backup):
     can_evaluate = check_permission("recruitment", "evaluate")
     can_soft_delete = check_permission("recruitment", "soft_delete")
@@ -391,7 +391,7 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
             supabase.table("hr_applications").update({"manual_score": {"subjective_rating": new_sub}}).eq("id", app_id).execute()
             st.session_state.force_open_app_id = app_id
             st.rerun()
-                # --- ОСНОВЕН РЕНДЕР ---
+# --- ОСНОВЕН РЕНДЕР ---
 def render_recruitment_module():
     if "active_company" not in st.session_state: 
         st.session_state.active_company = None
