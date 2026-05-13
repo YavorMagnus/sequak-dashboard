@@ -253,85 +253,36 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
             trunc_txt = last_human_comment['comment_text'][:120] + "..." if len(last_human_comment['comment_text']) > 120 else last_human_comment['comment_text']
             st.markdown(f"<div style='font-size: 0.85em; color: #aaa; margin-top: 5px; padding-left: 10px; border-left: 2px solid #555;'>💬 <b>{last_human_comment['author_name']}:</b> {trunc_txt}</div>", unsafe_allow_html=True)
 
-    st.divider()
-    
-    if is_ghost_record: 
-        st.error("🔒 **Този кандидат е преместен в друга кампания.**")
-    elif can_evaluate:
-        pos_info = next((p for p in all_global_positions_raw if p["id"] == current_pos_id), {})
-        st.markdown(f"""<div style="background-color: #2e2e2e; padding: 8px 15px; border-radius: 5px; margin-bottom: 15px; font-size: 0.9em; border-left: 3px solid #00aaff;">📌 <b>Обява:</b> {pos_info.get('title')} | 📍 {pos_info.get('city', '-')} | 💰 {pos_info.get('salary_min','-')}-{pos_info.get('salary_max','-')} EUR</div>""", unsafe_allow_html=True)
-
-        col1, col2, col3, col4 = st.columns(4)
-        statuses = ["Нов", "Установи контакт", "В процес на контакт", "Възможно интервю", "Избран за интервю", "Потвърдено интервю", "Направено предложение", "Отхвърлен", "Отказал", "Преместен"]
-        c_status = "Копирай / Премести" if status == "Преместен" else status
-        all_options = statuses + ["Копирай / Премести"]
-        
-        with col1: 
-            current_sel = st.selectbox("Смени статус", all_options, index=all_options.index(c_status) if c_status in all_options else 0, label_visibility="collapsed")
-        
-        target_pos_ids = []
-        reject_reason = None
-        btn_disabled = False
-        keep_active = False
-        
-        if current_sel == "Копирай / Премести":
-            other_positions = [p for p in all_active_positions if p["id"] != current_pos_id]
-            if other_positions:
-                pos_options = {p['id']: get_pos_display_name(p) for p in other_positions}
-                target_pos_ids = st.multiselect("Целеви кампании:", options=list(pos_options.keys()), format_func=lambda x: pos_options[x])
-                keep_active = st.checkbox("Запази кандидата тук (Копиране)", value=False)
-                if not target_pos_ids: 
-                    btn_disabled = True
-            else: 
-                st.warning("Няма други кампании.")
-                btn_disabled = True
-        elif current_sel in ["Отхвърлен", "Отказал"]:
-            reasons = ["--- Изберете причина ---"] + (sys_reject_reasons if current_sel == "Отхвърлен" else sys_decline_reasons)
-            reject_reason = st.selectbox("Уточнете причина:", reasons)
-            if reject_reason == "--- Изберете причина ---": 
-                btn_disabled = True
-
-        with col2: 
-            if st.button("💾 Запиши промяна", type="primary", use_container_width=True, disabled=btn_disabled):
-                curr_title = next(p["title"] for p in all_global_positions_raw if p["id"] == current_pos_id)
-                if current_sel == "Копирай / Премести":
-                    if not keep_active:
-                        supabase.table("hr_applications").update({"status": "Преместен"}).eq("id", app_id).execute()
-                        log_status_change(app_id, status, "Преместен")
-                    for t_id in target_pos_ids:
-                        new_app = supabase.table("hr_applications").insert({"candidate_id": candidate_id, "position_id": t_id, "status": "Нов"}).execute()
-                else:
-                    supabase.table("hr_applications").update({"status": current_sel, "resolution_reason": reject_reason}).eq("id", app_id).execute()
-                    log_status_change(app_id, status, current_sel)
-                st.session_state.force_open_app_id = app_id
-                st.rerun()
-                
-        with col3: 
-            with st.popover("✉️ Сподели", use_container_width=True):
-                share_url = f"https://yavormagnus-sequak-dashboard-main-xhjn3h.streamlit.app/?app_id={app_id}"
-                st.markdown(f"""<div style="font-family: Arial; padding: 10px; background: #f9f9f9; color: #333; border-radius: 5px; border: 1px solid #ddd;"><b>Кандидат:</b> {candidate_name}<br><br><a href="{share_url}" target="_blank" style="padding: 8px; background: #0056b3; color: white; text-decoration: none; border-radius: 4px;">🔗 Отвори в Sequak</a></div>""", unsafe_allow_html=True)
-                st.text_input("Директен линк:", value=share_url)
-                
-        with col4:
-            if can_soft_delete:
-                if st.button("🗑️ Изтрий", use_container_width=True):
-                    supabase.table("hr_applications").update({"is_deleted": True}).eq("id", app_id).execute()
-                    st.success("Кандидатът е в Кошчето!")
-                    time.sleep(1)
-                    st.rerun()
-        
-    st.divider()
+st.divider()
     tabs = st.tabs(["📋 Въпросник", "📝 Бележки", "📄 CV", "📅 Интервюта", "📊 Оценка"])
     cv_dict = raw_cv_data if isinstance(raw_cv_data, dict) else {}
     
     with tabs[0]: 
-        st.markdown(cv_dict.get("questionnaire", "Няма данни"))
-        
+        if can_evaluate and st.button("✏️ Редактирай Въпросник", key=f"edit_q_{app_id}"): 
+            st.session_state[f"q_edit_{app_id}"] = not st.session_state.get(f"q_edit_{app_id}", False)
+        if st.session_state.get(f"q_edit_{app_id}", False):
+            new_q = st.text_area("Редакция", value=cv_dict.get("questionnaire", ""), height=300, key=f"txt_q_{app_id}")
+            if st.button("💾 Запази", key=f"save_q_{app_id}"):
+                cv_dict["questionnaire"] = new_q
+                supabase.table("hr_candidates").update({"raw_cv_data": cv_dict}).eq("id", candidate_id).execute()
+                st.session_state[f"q_edit_{app_id}"] = False
+                st.session_state.force_open_app_id = app_id
+                st.rerun()
+        else: 
+            st.markdown(cv_dict.get("questionnaire", "Няма данни"))
+    
     with tabs[1]:
         for comm in comments:
             is_sys = "🤖 Система" in comm['author_name']
             with st.chat_message("assistant" if is_sys else "user"):
-                st.write(f"**{comm['author_name']}** ({comm['created_at'][:16]})\n\n{comm['comment_text']}")
+                c1, c2 = st.columns([9,1])
+                c1.write(f"**{comm['author_name']}** ({comm['created_at'][:16]})\n\n{comm['comment_text']}")
+                if not is_sys and comm['author_name'] == current_user and "🗑️" not in comm['comment_text']:
+                    if c2.button("🗑️", key=f"del_c_{comm['id']}", help="Изтрий бележката"):
+                        supabase.table("hr_comments").update({"comment_text": f"🗑️ *Бележката е изтрита от {comm['author_name']} на {datetime.now().strftime('%Y-%m-%d %H:%M')}*"}).eq("id", comm['id']).execute()
+                        st.session_state.force_open_app_id = app_id
+                        st.rerun()
+                        
         if not is_ghost_record and can_evaluate:
             with st.form("new_comment", clear_on_submit=True):
                 comment_txt = st.text_area("Добави коментар:")
@@ -339,10 +290,21 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
                     supabase.table("hr_comments").insert({"application_id": app_id, "author_name": current_user, "comment_text": comment_txt}).execute()
                     st.session_state.force_open_app_id = app_id
                     st.rerun()
-                    
+
     with tabs[2]: 
-        st.markdown(cv_dict.get("cv_text", "Няма данни"))
-        
+        if can_evaluate and st.button("✏️ Редактирай CV", key=f"edit_cv_{app_id}"): 
+            st.session_state[f"cv_edit_{app_id}"] = not st.session_state.get(f"cv_edit_{app_id}", False)
+        if st.session_state.get(f"cv_edit_{app_id}", False):
+            new_cv = st.text_area("Редакция", value=cv_dict.get("cv_text", ""), height=400, key=f"txt_cv_{app_id}")
+            if st.button("💾 Запази", key=f"save_cv_{app_id}"):
+                cv_dict["cv_text"] = new_cv
+                supabase.table("hr_candidates").update({"raw_cv_data": cv_dict}).eq("id", candidate_id).execute()
+                st.session_state[f"cv_edit_{app_id}"] = False
+                st.session_state.force_open_app_id = app_id
+                st.rerun()
+        else: 
+            st.markdown(cv_dict.get("cv_text", "Няма данни"))
+    
     with tabs[3]:
         if not is_ghost_record and check_permission("recruitment", "schedule"):
             with st.form("propose_dates"):
@@ -363,6 +325,7 @@ def open_candidate_card(app_id, candidate_id, candidate_name, status, raw_cv_dat
             supabase.table("hr_applications").update({"manual_score": {"subjective_rating": new_sub}}).eq("id", app_id).execute()
             st.session_state.force_open_app_id = app_id
             st.rerun()
+   
 # --- ОСНОВЕН РЕНДЕР ---
 def render_recruitment_module():
     if "active_company" not in st.session_state: 
