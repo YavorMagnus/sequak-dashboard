@@ -5,22 +5,10 @@ from parsers import parse_jobs_zip
 import time
 from datetime import datetime
 
-# --- ИНИЦИАЛИЗАЦИЯ НА СЕСИЯТА & DEEP LINKING ---
+# --- ИНИЦИАЛИЗАЦИЯ НА СЕСИЯТА ---
 if "active_company" not in st.session_state: st.session_state.active_company = None
 if "active_campaign_id" not in st.session_state: st.session_state.active_campaign_id = None
 if "force_open_global_interviews" not in st.session_state: st.session_state.force_open_global_interviews = False
-
-# Прихващане на Deep Link (URL Параметър)
-if "app_id" in st.query_params:
-    deep_app_id = st.query_params["app_id"]
-    st.query_params.clear() # Изчистваме URL-а, за да не цикли
-    try:
-        dl_res = supabase.table("hr_applications").select("position_id, hr_positions(company_name)").eq("id", deep_app_id).execute()
-        if dl_res.data:
-            st.session_state.active_company = dl_res.data[0]["hr_positions"]["company_name"]
-            st.session_state.active_campaign_id = dl_res.data[0]["position_id"]
-            st.session_state.force_open_app_id = deep_app_id
-    except: pass
 
 # Карта на емоджитата за статус
 EMOJI_MAP = {
@@ -409,6 +397,19 @@ def render_recruitment_module():
     if "active_company" not in st.session_state: st.session_state.active_company = None
     if "active_campaign_id" not in st.session_state: st.session_state.active_campaign_id = None
 
+    # --- DEEP LINKING LOGIC (ПРЕМЕСТЕНА ТУК ЗА V39.4) ---
+    if "app_id" in st.query_params:
+        deep_app_id = st.query_params["app_id"]
+        st.query_params.clear() # Изчистваме URL-а, за да не цикли
+        try:
+            dl_res = supabase.table("hr_applications").select("position_id, hr_positions(company_name)").eq("id", deep_app_id).execute()
+            if dl_res.data:
+                st.session_state.active_company = dl_res.data[0]["hr_positions"]["company_name"]
+                st.session_state.active_campaign_id = dl_res.data[0]["position_id"]
+                st.session_state.force_open_app_id = deep_app_id
+        except Exception:
+            pass
+
     COMPANIES = ["REN", "CIM", "MAS", "BAU", "AST", "CMX", "RXS", "SNW", "RXB", "DXM"]
     current_user = st.session_state.get("username", "Unknown")
     
@@ -473,7 +474,7 @@ def render_recruitment_module():
                 st.caption("Всичко е приключено. Страхотна работа!")
 
     c1, c2 = st.columns([3,1])
-    c1.header("📋 Модул Подбор (V39.3 Fix)")
+    c1.header("📋 Модул Подбор (V39.4 Fix)")
     with c2:
         if st.button("📅 Глобален график интервюта", use_container_width=True) or st.session_state.get("force_open_global_interviews", False):
             all_int_apps = supabase.table("hr_applications").select("*, hr_candidates(*)").neq("interview_details", "null").eq("is_deleted", False).execute().data or []
