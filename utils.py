@@ -5,7 +5,7 @@ import re
 
 # --- СВЪРЗВАНЕ С БАЗАТА ДАННИ ---
 SUPABASE_URL = "https://cymfodenkklcjhjgfeau.supabase.co"
-SUPABASE_KEY = "sb_publishable_blR-3tOs1E8M-gXtv8DVBA_LiEGG8Y6"
+SUPABASE_KEY = st.secrets["SUPABASE_SECRET_KEY"]
 
 @st.cache_resource
 def init_connection():
