@@ -191,12 +191,30 @@ def create_position_modal(preselected_company):
             "AI оценка + човешка субективна оценка"
         ])
         
+        col_sal1, col_sal2 = st.columns(2)
+        with col_sal1:
+            new_salary_min = st.text_input("Мин. възнаграждение (EUR)")
+        with col_sal2:
+            new_salary_max = st.text_input("Макс. възнаграждение (EUR)")
+            
+        col_loc1, col_loc2 = st.columns(2)
+        with col_loc1:
+            new_city = st.text_input("Град", value="София")
+        with col_loc2:
+            new_base = st.text_input("База (незадължително)")
+            
+        work_type = st.selectbox("Тип работа", ["Присъствено", "Хибридно", "Дистанционно"])
+        priority = st.selectbox("Приоритет", ["Нормален", "Висок", "Спешен"])
+        
         st.divider()
         if st.form_submit_button("➕ Създай обява", type="primary"):
             if title and owners:
                 data = {
                     "company_name": sel_comp, "title": title, "status": "Активна",
                     "owners": owners, "hr_contact": hr, "evaluation_method": eval_method,
+                    "salary_min": new_salary_min, "salary_max": new_salary_max,
+                    "city": new_city, "base_location": new_base,
+                    "work_type": work_type, "priority": priority,
                     "is_deleted": False
                 }
                 res = supabase.table("hr_positions").insert(data).execute()
