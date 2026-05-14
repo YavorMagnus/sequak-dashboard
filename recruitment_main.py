@@ -5,7 +5,74 @@ from recruitment_modals import edit_position_modal, candidate_card_modal, create
 # ИМПОРТ САМО НА СТАРИТЕ, РАБОТЕЩИ ПАРСЪРИ
 from parsers import parse_jobs_zip, parse_spreadsheet
 
+# ДЕФИНИРАНЕ НА CSS ЗА КАНБАН ДЪСКАТА
+KANBAN_CSS = """
+<style>
+/* Заглавия на Канбан колоните */
+.kanban-header {
+    text-align: center;
+    font-size: 14px;
+    font-weight: bold;
+    padding: 8px;
+    background-color: #2e303e; /* Леко по-светло от фона на Streamlit */
+    border-radius: 8px 8px 0 0;
+    margin-bottom: 0px;
+    border-bottom: 2px solid #5a5e71;
+}
+
+/* Стилизиране на бутоните като квадратни картички */
+.stButton > button {
+    height: 100px; /* Квадратна форма */
+    width: 100% !important;
+    border-radius: 8px;
+    background-color: #1a1c24; /* По-тъмно от колоната */
+    border: 1px solid #3d4151;
+    color: white;
+    padding: 10px;
+    transition: all 0.3s ease;
+    margin-bottom: 8px;
+}
+
+.stButton > button:hover {
+    border-color: #ffb400 !important; /* Жълт акцент при ховър */
+    background-color: #2e303e;
+}
+
+/* Стилизиране на името на кандидата */
+.kanban-cand-name {
+    font-weight: bold;
+    font-size: 13px;
+    white-space: nowrap;      /* Спира пренасянето на нов ред */
+    overflow: hidden;         /* Скрива прелялото име */
+    text-overflow: ellipsis;  /* Слага "..." накрая */
+    display: block;
+    width: 100%;
+}
+
+/* Стилизиране на иконката */
+.kanban-cand-icon {
+    font-size: 18px;
+    margin-right: 5px;
+}
+
+/* Стилизиране на ЗЛАТНАТА РАМКА за Резерва */
+div[data-is-reserve="true"] button {
+    border: 2px solid #ffb400 !important; /* Златна рамка */
+}
+
+/* Заглавие на секцията за Архивирани */
+.inactive-header {
+    margin-top: 15px;
+    margin-bottom: 5px;
+    font-weight: bold;
+}
+</style>
+"""
+
 def run_recruitment():
+    # Зареждане на CSS
+    st.markdown(KANBAN_CSS, unsafe_allow_html=True)
+    
     st.title("🎯 Подбор на персонал (Recruitment)")
     
     # --- ИНИЦИАЛИЗАЦИЯ НА СЕСИЯТА ---
@@ -20,6 +87,7 @@ def run_recruitment():
     query_params = st.query_params
     if "app_id" in query_params and not st.session_state.deep_link_triggered:
         target_app_id = query_params["app_id"]
+        # Грабоваме и positions данните
         target_app = supabase.table("hr_applications").select("*, hr_candidates(*), hr_positions(*)").eq("id", target_app_id).execute()
         if target_app.data:
             app_data = target_app.data[0]
@@ -131,7 +199,7 @@ def run_recruitment():
                 
     st.divider()
 
-    # --- 5. КАНБАН ДЪСКА (ЕТАП 3) ---
+    # --- 5. КАНБАН ДЪСКА (ЕТАП 3 - СТИЛИЗИРАНА) ---
     st.markdown(f"### 👥 Фуния на подбора (Kanban)")
 
     apps_query = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("position_id", selected_pos_id).eq("is_deleted", False)
@@ -143,36 +211,64 @@ def run_recruitment():
         active_statuses = ["Нов", "Установи контакт", "Възможно интервю", "Избран за интервю", "Потвърдено интервю", "Направено предложение"]
         inactive_statuses = ["Отхвърлен", "Отказал", "Преместен"]
         
-        # 5.1 АКТИВНИ КОЛОНИ
+        # 5.1 АКТИВНИ КОЛОНИ (6 вертикални колони)
+        # Използваме unsafe HTML, за да вкараме контейнери около бутоните за рамката
+        
         cols = st.columns(len(active_statuses))
         for i, status in enumerate(active_statuses):
             with cols[i]:
-                # Стилизирано заглавие на колоната
-                st.markdown(f"<div style='text-align: center; font-size: 14px; font-weight: bold; padding: 5px; background-color: #2e303e; border-radius: 5px; margin-bottom: 10px;'>{status}</div>", unsafe_allow_html=True)
+                # Стилизирано заглавие на колоната (чрез CSS класа)
+                st.markdown(f"<div class='kanban-header'>{status}</div>", unsafe_allow_html=True)
                 
                 status_apps = [app for app in applications if app.get('status') == status]
+                
+                # Добавяме малко въздух между хедъра и картите
+                st.write("") 
+                
                 for app in status_apps:
                     cand = app.get("hr_candidates", {})
                     full_name = cand.get('full_name', 'Неизвестен кандидат')
+                    int_details = app.get('interview_details') or {}
                     
-                    # Бутон-картичка
-                    if st.button(f"👤 {full_name}", key=f"kanban_btn_{app['id']}", use_container_width=True):
+                    # ПРОВЕРКА ЗА РЕЗЕРВА
+                    is_reserve = int_details.get('reserve_checkbox', False)
+                    
+                    icon = "👤" if not is_reserve else "👤⭐"
+                    # Предотвратяваме пренасянето на нов ред в самия етикет
+                    cand_label = f"<span class='kanban-cand-icon'>{icon}</span> <span class='kanban-cand-name'>{full_name}</span>"
+                    
+                    # Използваме html контейнер само за да подадем данни към CSS за рамката
+                    st.markdown(f"<div data-is-reserve='{str(is_reserve).lower()}'>", unsafe_allow_html=True)
+                    # Бутон-картичка (Streamlit етикетът не поддържа HTML, затова името ще се парсне в CSS класовете на бутона)
+                    if st.button(f"{full_name}", key=f"kanban_btn_{app['id']}", use_container_width=True):
                         candidate_card_modal(cand, app, selected_pos_data)
+                    st.markdown("</div>", unsafe_allow_html=True)
 
         st.write("<br>", unsafe_allow_html=True)
         
-        # 5.2 АРХИВИРАНИ КАНДИДАТИ (Сгъваем панел)
+        # 5.2 АРХИВИРАНИ КАНДИДАТИ (Сгъваем панел долу)
         inactive_apps = [app for app in applications if app.get('status') in inactive_statuses]
         if inactive_apps:
             with st.expander(f"🗄️ Архивирани / Приключени кандидати ({len(inactive_apps)})"):
                 in_cols = st.columns(3)
                 for i, i_status in enumerate(inactive_statuses):
                     with in_cols[i]:
-                        st.markdown(f"**{i_status}**")
+                        st.markdown(f"<div class='inactive-header'>{i_status}</div>", unsafe_allow_html=True)
                         i_status_apps = [app for app in inactive_apps if app.get('status') == i_status]
                         for app in i_status_apps:
                             cand = app.get("hr_candidates", {})
                             full_name = cand.get('full_name', 'Неизвестен')
+                            int_details = app.get('interview_details') or {}
+                            is_reserve = int_details.get('reserve_checkbox', False)
                             
-                            if st.button(f"👤 {full_name}", key=f"kanban_in_btn_{app['id']}", use_container_width=True):
+                            # При архивираните добавяме златна звезда в самия текст, за по-видимо
+                            # И златна рамка
+                            display_name = full_name
+                            if is_reserve:
+                                display_name = f"⭐ {full_name}"
+                            
+                            # Златна рамка
+                            st.markdown(f"<div data-is-reserve='{str(is_reserve).lower()}'>", unsafe_allow_html=True)
+                            if st.button(f"👤 {display_name}", key=f"kanban_in_btn_{app['id']}", use_container_width=True):
                                 candidate_card_modal(cand, app, selected_pos_data)
+                            st.markdown("</div>", unsafe_allow_html=True)
