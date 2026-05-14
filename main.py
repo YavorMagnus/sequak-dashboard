@@ -8,7 +8,8 @@ from utils import supabase, check_permission
 from mp import render_mp_dashboard
 from ro import check_and_show_alerts, render_ro_registry, render_ro_analytics
 from admin_panel import render_admin_panel
-from recruitment import render_recruitment_module
+# ПОПРАВКАТА Е ТУК:
+from recruitment_main import run_recruitment
 
 st.markdown("""
     <style>
@@ -85,7 +86,6 @@ if not st.session_state.logged_in:
                         st.session_state.logged_in = True
                         st.session_state.user_role = user_data.get('role', 'Четец')
                         st.session_state.username = user_data['username']
-                        # Извличаме детайлния JSON с права
                         st.session_state.user_permissions = user_data.get('permissions') or {}
                         st.session_state.alerts_dismissed = False
                         st.rerun()
@@ -153,7 +153,8 @@ elif page == "📈 Анализи и Справки (РО)":
     render_ro_analytics()
     
 elif page == "🎯 Рекрутмънт и Подбор":
-    render_recruitment_module()
+    # И ПОПРАВКАТА Е ТУК:
+    run_recruitment()
 
 elif page == "⚙️ Управление на достъпи":
     render_admin_panel()
