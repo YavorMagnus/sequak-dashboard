@@ -39,7 +39,6 @@ def run_recruitment():
     # -------------------------------------------------------------------------
     # 3. ИЗБОР НА ФИРМА И НОВА КАМПАНИЯ
     # -------------------------------------------------------------------------
-    # ТОЧНИТЕ 10 ФИРМИ
     companies = ["REN", "CIM", "MAS", "BAU", "AST", "RXS", "RXB", "SNW", "DXM", "ICM"]
     col_comp, col_new = st.columns([3, 1])
     
@@ -69,9 +68,11 @@ def run_recruitment():
     with col_toggle:
         show_archived = st.toggle("Покажи архивирани", value=False)
 
-    query = supabase.table("hr_positions").select("*").eq("company_name", st.session_state.active_company)
+    # Заявка, съобразена с РЕАЛНАТА база (is_deleted и status)
+    query = supabase.table("hr_positions").select("*").eq("company_name", st.session_state.active_company).eq("is_deleted", False)
     if not show_archived:
-        query = query.eq("is_active", True)
+        query = query.eq("status", "Активна")
+        
     positions = query.execute().data
 
     if not positions:
@@ -81,7 +82,6 @@ def run_recruitment():
     if search_term:
         positions = [p for p in positions if search_term.lower() in p.get('title', '').lower() or search_term.lower() in p.get('city', '').lower()]
 
-    # Функция за визуално показване на "Пожарите"
     def get_prio_icon(prio):
         if prio == "Спешен": return "🔥"
         if prio == "Висок": return "⚡"
@@ -122,7 +122,7 @@ def run_recruitment():
         st.session_state.active_status_filter = selected_status
         st.rerun()
 
-    apps_query = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("position_id", selected_pos_id)
+    apps_query = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("position_id", selected_pos_id).eq("is_deleted", False)
     if st.session_state.active_status_filter != "Всички":
         apps_query = apps_query.eq("status", st.session_state.active_status_filter)
     applications = apps_query.execute().data
@@ -132,6 +132,7 @@ def run_recruitment():
     else:
         for app in applications:
             cand = app.get("hr_candidates", {})
-            btn_label = f"👤 {cand.get('first_name', '')} {cand.get('last_name', '')} | {app.get('status', 'Нов')}"
+            full_name = cand.get('full_name', 'Неизвестен кандидат')
+            btn_label = f"👤 {full_name} | {app.get('status', 'Нов')}"
             if st.button(btn_label, key=f"btn_cand_{app['id']}", use_container_width=True):
                 candidate_card_modal(cand, app)
