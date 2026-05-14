@@ -12,7 +12,7 @@ def edit_position_modal(pos_data):
         st.error("Нямате права за редакция на обяви.")
         return
 
-    st.markdown(f"### ⚙️ {pos_data.get('title', 'Неизвестна обява')}")
+    st.markdown(f"### ⚙️ Редакция: {pos_data.get('title', 'Неизвестна обява')}")
     
     with st.form(key=f"form_edit_pos_{pos_data.get('id', 'new')}"):
         col1, col2 = st.columns(2)
@@ -66,7 +66,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
         if candidate.get('photo_thumbnail'):
             st.image(f"data:image/png;base64,{candidate['photo_thumbnail']}", use_container_width=True)
         else:
-            st.write("👤")
+            st.write("<div style='font-size: 60px; text-align: center; color: gray;'>👤</div>", unsafe_allow_html=True)
             
     with col_info:
         st.subheader(candidate.get('full_name', 'Неизвестен'))
@@ -145,14 +145,52 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
         curr_idx = statuses.index(app_data.get('status', 'Нов')) if app_data.get('status') in statuses else 0
         new_status = st.selectbox("Изберете нов статус", statuses, index=curr_idx)
         
-        # Специфични полета за Отхвърлен
+        # Специфични полета за Отхвърлен (ЕТАП 3 - ЗАРЕЖДАНЕ ОТ hr_settings)
+        rejection_reason_index = 0
+        reasons_list = []
+        is_reserve_value = False
+        
         if new_status == "Отхвърлен":
-            reasons = ["Недостатъчен опит", "Високи финансови претенции", "Лошо представяне на интервю", "Друго"]
-            st.selectbox("Причина за отхвърляне", reasons)
-            st.checkbox("Запази като резерва", value=False)
+            # 1. Зареждаме причините от базата
+            try:
+                settings_data = supabase.table("hr_settings").select("settings_data").eq("setting_key", "rejection_reasons").execute()
+                if settings_data.data:
+                    # JSONB колоната се парсва автоматично в Python списък
+                    reasons_list = settings_data.data[0].get("settings_data", [])
+            except Exception as e:
+                st.error(f"Грешка при зареждане на причини: {e}")
+            
+            if not reasons_list:
+                # Fallback, ако базата е празна
+                reasons_list = ["Друго"]
+            
+            # 2. Установяваме текущо избраната причина (ако има такава в interview_details)
+            current_reason = int_details.get('rejection_reason')
+            if current_reason and current_reason in reasons_list:
+                rejection_reason_index = reasons_list.index(current_reason)
+                
+            # 3. Визуализираме selectbox
+            st.selectbox("Причина за отхвърляне", reasons_list, index=rejection_reason_index, key=f"sel_reason_{app_data['id']}")
+            
+            # 4. Визуализираме "Запази като резерва"
+            is_reserve_value = int_details.get('reserve_checkbox', False)
+            st.checkbox("Запази като резерва ⭐", value=is_reserve_value, key=f"check_reserve_{app_data['id']}")
             
         if st.button("🔄 Промени статуса", use_container_width=True, type="primary"):
-            supabase.table("hr_applications").update({"status": new_status}).eq("id", app_data['id']).execute()
+            
+            # Обновяваме interview_details при Отхвърлен
+            if new_status == "Отхвърлен":
+                # Достъпваме стойностите чрез session_state ключовете, зададени по-горе
+                if f"sel_reason_{app_data['id']}" in st.session_state:
+                    int_details['rejection_reason'] = st.session_state[f"sel_reason_{app_data['id']}"]
+                if f"check_reserve_{app_data['id']}" in st.session_state:
+                    int_details['reserve_checkbox'] = st.session_state[f"check_reserve_{app_data['id']}"]
+            
+            supabase.table("hr_applications").update({
+                "status": new_status,
+                "interview_details": int_details
+            }).eq("id", app_data['id']).execute()
+            
             st.success(f"Статусът е променен на {new_status}")
             st.rerun()
 
@@ -220,6 +258,10 @@ def create_position_modal(preselected_company):
                 res = supabase.table("hr_positions").insert(data).execute()
                 if res.data:
                     st.success("Обявата е създадена!")
+                    st.session_state.active_campaign_id = res.data[0]['id']
+                    st.session_state.active_company = sel_comp
                     st.rerun()
+                else:
+                    st.error("Грешка при запис в базата данни.")
             else:
                 st.error("Попълнете задължителните полета!")
