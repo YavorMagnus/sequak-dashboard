@@ -34,17 +34,16 @@ def edit_position_modal(pos_data):
             prio_index = priority_options.index(current_priority) if current_priority in priority_options else 0
             new_priority = st.selectbox("Приоритет", priority_options, index=prio_index)
             
+            # Четем и записваме директно status, а не is_active
             status_options = ["Активна", "Архивирана (Изтекла)"]
-            is_active = pos_data.get('is_active', True)
-            status_index = 0 if is_active else 1
+            current_status = pos_data.get('status', 'Активна')
+            status_index = status_options.index(current_status) if current_status in status_options else 0
             new_status = st.selectbox("Статус на кампанията", status_options, index=status_index)
 
         st.divider()
         submit_btn = st.form_submit_button("💾 Запази промените", type="primary")
         
         if submit_btn:
-            final_is_active = True if new_status == "Активна" else False
-            
             update_data = {
                 "title": new_title,
                 "city": new_city,
@@ -52,7 +51,7 @@ def edit_position_modal(pos_data):
                 "salary_min": new_salary_min,
                 "salary_max": new_salary_max,
                 "priority": new_priority,
-                "is_active": final_is_active
+                "status": new_status
             }
             
             response = supabase.table("hr_positions").update(update_data).eq("id", pos_data['id']).execute()
@@ -68,32 +67,38 @@ def edit_position_modal(pos_data):
 # -----------------------------------------------------------------------------
 @st.dialog("Картон на кандидата", width="large")
 def candidate_card_modal(candidate, app_data):
-    st.markdown(f"## 👤 {candidate.get('first_name', '')} {candidate.get('last_name', '')}")
-    st.caption(f"📧 Имейл: {candidate.get('email', 'Няма')} | 📱 Телефон: {candidate.get('phone', 'Няма')}")
+    # Адаптация към full_name и raw_cv_data JSONB
+    full_name = candidate.get('full_name', 'Неизвестен кандидат')
+    cv_data = candidate.get('raw_cv_data') or {}
+    
+    st.markdown(f"## 👤 {full_name}")
+    st.caption(f"📧 Имейл: {cv_data.get('email', 'Няма')} | 📱 Телефон: {cv_data.get('phone', 'Няма')}")
     
     st.divider()
     
     col1, col2 = st.columns([2, 1])
     
+    # Адаптация към interview_details JSONB
+    int_details = app_data.get('interview_details') or {}
+    
     with col1:
         st.markdown("### Оценка и Въпросник")
         if check_permission("recruitment", "evaluate"):
             with st.form(key=f"form_eval_{candidate.get('id', 'new')}"):
-                new_notes = st.text_area("Бележки от интервю / Резултати от въпросник", value=app_data.get('notes', ''), height=300)
+                new_notes = st.text_area("Бележки от интервю / Резултати от въпросник", value=int_details.get('notes', ''), height=300)
                 submit_eval = st.form_submit_button("💾 Запази бележките", type="primary")
                 
                 if submit_eval:
-                    supabase.table("hr_applications").update({"notes": new_notes}).eq("id", app_data['id']).execute()
+                    int_details['notes'] = new_notes
+                    supabase.table("hr_applications").update({"interview_details": int_details}).eq("id", app_data['id']).execute()
                     st.success("Бележките са запазени!")
                     st.rerun()
         else:
             st.info("Нямате права за редакция на оценки. Режим на четене.")
-            st.write(app_data.get('notes', 'Няма въведени бележки или въпросник.'))
+            st.write(int_details.get('notes', 'Няма въведени бележки или въпросник.'))
 
     with col2:
         st.markdown("### Операции")
-        
-        # ТОЧНИТЕ 9 СТАТУСА!
         current_status = app_data.get('status', 'Нов')
         status_options = [
             "Нов", "Установи контакт", "Възможно интервю", 
@@ -115,10 +120,9 @@ def candidate_card_modal(candidate, app_data):
         if check_permission("recruitment", "schedule"):
             st.markdown("#### 📅 Насрочване")
             with st.form(key=f"form_schedule_{candidate.get('id', 'new')}"):
-                
-                exist_date = app_data.get('interview_date')
-                exist_time = app_data.get('interview_time')
-                exist_interviewer = app_data.get('interviewer_name', '')
+                exist_date = int_details.get('interview_date')
+                exist_time = int_details.get('interview_time')
+                exist_interviewer = int_details.get('interviewer_name', '')
                 
                 parsed_date = datetime.strptime(exist_date, "%Y-%m-%d").date() if exist_date else None
                 parsed_time = datetime.strptime(exist_time, "%H:%M:%S").time() if exist_time else None
@@ -130,12 +134,11 @@ def candidate_card_modal(candidate, app_data):
                 submit_schedule = st.form_submit_button("Запази интервю", use_container_width=True)
                 
                 if submit_schedule:
-                    schedule_data = {
-                        "interview_date": int_date.strftime("%Y-%m-%d") if int_date else None,
-                        "interview_time": int_time.strftime("%H:%M:%S") if int_time else None,
-                        "interviewer_name": interviewer
-                    }
-                    supabase.table("hr_applications").update(schedule_data).eq("id", app_data['id']).execute()
+                    int_details['interview_date'] = int_date.strftime("%Y-%m-%d") if int_date else None
+                    int_details['interview_time'] = int_time.strftime("%H:%M:%S") if int_time else None
+                    int_details['interviewer_name'] = interviewer
+                    
+                    supabase.table("hr_applications").update({"interview_details": int_details}).eq("id", app_data['id']).execute()
                     st.success("Интервюто е насрочено успешно!")
                     st.rerun()
 
@@ -156,7 +159,7 @@ def create_position_modal(company_name):
         st.markdown("👥 **Роли по кампанията (за Action Center)**")
         col_roles1, col_roles2 = st.columns(2)
         with col_roles1:
-            owners = st.text_input("Собственици (Мениджъри) - разделени със запетая")
+            owners_raw = st.text_input("Собственици (Мениджъри) - разделени със запетая")
         with col_roles2:
             hr_contact = st.text_input("HR (Установяващ контакт)")
             
@@ -184,6 +187,9 @@ def create_position_modal(company_name):
             if not new_title:
                 st.error("Името на позицията е задължително!")
             else:
+                # Трансформираме стринга със запетаи в истински JSON масив за Supabase
+                owners_list = [o.strip() for o in owners_raw.split(",") if o.strip()]
+                
                 insert_data = {
                     "company_name": company_name,
                     "title": new_title,
@@ -192,7 +198,12 @@ def create_position_modal(company_name):
                     "salary_min": new_salary_min,
                     "salary_max": new_salary_max,
                     "priority": priority,
-                    "is_active": True
+                    "status": "Активна",
+                    "is_deleted": False,
+                    "owners": owners_list,
+                    "hr_contact": hr_contact,
+                    "work_type": work_type,
+                    "evaluation_method": eval_method
                 }
                 
                 response = supabase.table("hr_positions").insert(insert_data).execute()
