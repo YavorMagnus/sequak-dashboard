@@ -8,16 +8,15 @@ from parsers import parse_jobs_zip, parse_spreadsheet
 def run_recruitment():
     st.title("🎯 Подбор на персонал (Recruitment)")
     
+    # --- ИНИЦИАЛИЗАЦИЯ НА СЕСИЯТА ---
     if "active_company" not in st.session_state:
         st.session_state.active_company = "ВСИЧКИ" 
     if "active_campaign_id" not in st.session_state:
         st.session_state.active_campaign_id = None
-    if "active_status_filter" not in st.session_state:
-        st.session_state.active_status_filter = "Всички"
     if "deep_link_triggered" not in st.session_state:
         st.session_state.deep_link_triggered = False
 
-    # 1. DEEP LINK
+    # --- 1. DEEP LINK ---
     query_params = st.query_params
     if "app_id" in query_params and not st.session_state.deep_link_triggered:
         target_app_id = query_params["app_id"]
@@ -29,9 +28,9 @@ def run_recruitment():
                 st.session_state.active_company = pos_data.get("company_name", "REN")
                 st.session_state.active_campaign_id = pos_data.get("id")
             st.session_state.deep_link_triggered = True
-            candidate_card_modal(app_data.get("hr_candidates", {}), app_data)
+            candidate_card_modal(app_data.get("hr_candidates", {}), app_data, pos_data)
 
-    # 2. ИЗБОР НА ФИРМА (Pills) И НОВА ОБЯВА
+    # --- 2. ИЗБОР НА ФИРМА (Pills) И НОВА ОБЯВА ---
     companies = ["ВСИЧКИ", "REN", "CIM", "MAS", "BAU", "AST", "RXS", "RXB", "SNW", "DXM", "ICM"]
     
     col_comp, col_new = st.columns([5, 1])
@@ -47,7 +46,7 @@ def run_recruitment():
 
     st.divider()
 
-    # 3. СПИСЪК С ОБЯВИ
+    # --- 3. СПИСЪК С ОБЯВИ ---
     col_search, col_toggle = st.columns([3, 1])
     with col_search: search_term = st.text_input("🔍 Търсене на обява...")
     with col_toggle: show_archived = st.toggle("Покажи архивирани", value=False)
@@ -94,7 +93,7 @@ def run_recruitment():
             
     st.divider()
 
-    # 4. ЪПЛОУД НА КАНДИДАТИ
+    # --- 4. ЪПЛОУД НА КАНДИДАТИ ---
     if check_permission("recruitment", "manage_positions"):
         with st.expander("📥 Добави нови кандидати (Upload)", expanded=False):
             uploaded_files = st.file_uploader("Качете ZIP (Jobs.bg), CSV или XLSX файлове", accept_multiple_files=True, type=['zip', 'csv', 'xlsx'])
@@ -132,28 +131,48 @@ def run_recruitment():
                 
     st.divider()
 
-    # 5. КАНДИДАТИ ПО ОБЯВАТА
-    st.markdown(f"### 👥 Кандидати")
-    all_statuses = ["Всички", "Нов", "Установи контакт", "Възможно интервю", "Избран за интервю", "Потвърдено интервю", "Направено предложение", "Отхвърлен", "Отказал", "Преместен"]
-
-    status_index = all_statuses.index(st.session_state.active_status_filter) if st.session_state.active_status_filter in all_statuses else 0
-    selected_status = st.selectbox("📌 Филтър по статус:", options=all_statuses, index=status_index)
-
-    if selected_status != st.session_state.active_status_filter:
-        st.session_state.active_status_filter = selected_status
-        st.rerun()
+    # --- 5. КАНБАН ДЪСКА (ЕТАП 3) ---
+    st.markdown(f"### 👥 Фуния на подбора (Kanban)")
 
     apps_query = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("position_id", selected_pos_id).eq("is_deleted", False)
-    if st.session_state.active_status_filter != "Всички":
-        apps_query = apps_query.eq("status", st.session_state.active_status_filter)
     applications = apps_query.execute().data
 
     if not applications:
-        st.info("Няма кандидати с този статус.")
+        st.info("Няма кандидати по тази обява. Използвайте менюто за Upload по-горе.")
     else:
-        for app in applications:
-            cand = app.get("hr_candidates", {})
-            full_name = cand.get('full_name', 'Неизвестен кандидат')
-            btn_label = f"👤 {full_name} | {app.get('status', 'Нов')}"
-            if st.button(btn_label, key=f"btn_cand_{app['id']}", use_container_width=True):
-                candidate_card_modal(cand, app, selected_pos_data)
+        active_statuses = ["Нов", "Установи контакт", "Възможно интервю", "Избран за интервю", "Потвърдено интервю", "Направено предложение"]
+        inactive_statuses = ["Отхвърлен", "Отказал", "Преместен"]
+        
+        # 5.1 АКТИВНИ КОЛОНИ
+        cols = st.columns(len(active_statuses))
+        for i, status in enumerate(active_statuses):
+            with cols[i]:
+                # Стилизирано заглавие на колоната
+                st.markdown(f"<div style='text-align: center; font-size: 14px; font-weight: bold; padding: 5px; background-color: #2e303e; border-radius: 5px; margin-bottom: 10px;'>{status}</div>", unsafe_allow_html=True)
+                
+                status_apps = [app for app in applications if app.get('status') == status]
+                for app in status_apps:
+                    cand = app.get("hr_candidates", {})
+                    full_name = cand.get('full_name', 'Неизвестен кандидат')
+                    
+                    # Бутон-картичка
+                    if st.button(f"👤 {full_name}", key=f"kanban_btn_{app['id']}", use_container_width=True):
+                        candidate_card_modal(cand, app, selected_pos_data)
+
+        st.write("<br>", unsafe_allow_html=True)
+        
+        # 5.2 АРХИВИРАНИ КАНДИДАТИ (Сгъваем панел)
+        inactive_apps = [app for app in applications if app.get('status') in inactive_statuses]
+        if inactive_apps:
+            with st.expander(f"🗄️ Архивирани / Приключени кандидати ({len(inactive_apps)})"):
+                in_cols = st.columns(3)
+                for i, i_status in enumerate(inactive_statuses):
+                    with in_cols[i]:
+                        st.markdown(f"**{i_status}**")
+                        i_status_apps = [app for app in inactive_apps if app.get('status') == i_status]
+                        for app in i_status_apps:
+                            cand = app.get("hr_candidates", {})
+                            full_name = cand.get('full_name', 'Неизвестен')
+                            
+                            if st.button(f"👤 {full_name}", key=f"kanban_in_btn_{app['id']}", use_container_width=True):
+                                candidate_card_modal(cand, app, selected_pos_data)
