@@ -2,15 +2,14 @@ import streamlit as st
 import pandas as pd
 from utils import supabase, check_permission
 from recruitment_modals import edit_position_modal, candidate_card_modal, create_position_modal
+# ИМПОРТ САМО НА СТАРИТЕ, РАБОТЕЩИ ПАРСЪРИ
+from parsers import parse_jobs_zip, parse_spreadsheet
 
 def run_recruitment():
     st.title("🎯 Подбор на персонал (Recruitment)")
     
-    # -------------------------------------------------------------------------
-    # 1. ИНИЦИАЛИЗАЦИЯ НА СЕСИЯТА
-    # -------------------------------------------------------------------------
     if "active_company" not in st.session_state:
-        st.session_state.active_company = "REN" 
+        st.session_state.active_company = "ВСИЧКИ" 
     if "active_campaign_id" not in st.session_state:
         st.session_state.active_campaign_id = None
     if "active_status_filter" not in st.session_state:
@@ -18,65 +17,51 @@ def run_recruitment():
     if "deep_link_triggered" not in st.session_state:
         st.session_state.deep_link_triggered = False
 
-    # -------------------------------------------------------------------------
-    # 2. ПРОЦЕС 1: ВЪНШЕН DEEP LINK
-    # -------------------------------------------------------------------------
+    # 1. DEEP LINK
     query_params = st.query_params
     if "app_id" in query_params and not st.session_state.deep_link_triggered:
         target_app_id = query_params["app_id"]
         target_app = supabase.table("hr_applications").select("*, hr_candidates(*), hr_positions(*)").eq("id", target_app_id).execute()
-        
         if target_app.data:
             app_data = target_app.data[0]
             pos_data = app_data.get("hr_positions", {})
-            candidate_data = app_data.get("hr_candidates", {})
             if pos_data:
                 st.session_state.active_company = pos_data.get("company_name", "REN")
                 st.session_state.active_campaign_id = pos_data.get("id")
             st.session_state.deep_link_triggered = True
-            candidate_card_modal(candidate_data, app_data)
+            candidate_card_modal(app_data.get("hr_candidates", {}), app_data)
 
-    # -------------------------------------------------------------------------
-    # 3. ИЗБОР НА ФИРМА И НОВА КАМПАНИЯ
-    # -------------------------------------------------------------------------
-    companies = ["REN", "CIM", "MAS", "BAU", "AST", "RXS", "RXB", "SNW", "DXM", "ICM"]
-    col_comp, col_new = st.columns([3, 1])
+    # 2. ИЗБОР НА ФИРМА (Pills) И НОВА ОБЯВА
+    companies = ["ВСИЧКИ", "REN", "CIM", "MAS", "BAU", "AST", "RXS", "RXB", "SNW", "DXM", "ICM"]
     
+    col_comp, col_new = st.columns([5, 1])
     with col_comp:
-        current_index = companies.index(st.session_state.active_company) if st.session_state.active_company in companies else 0
-        selected_company = st.selectbox("🏢 Изберете фирма:", options=companies, index=current_index)
-    
+        st.session_state.active_company = st.pills("Изберете фирма:", companies, default="ВСИЧКИ", selection_mode="single")
+        if not st.session_state.active_company: 
+            st.session_state.active_company = "ВСИЧКИ"
+            
     with col_new:
         st.write("<br>", unsafe_allow_html=True)
-        if st.button("➕ Нова кампания", use_container_width=True, type="primary"):
-            create_position_modal(selected_company)
-
-    if selected_company != st.session_state.active_company:
-        st.session_state.active_company = selected_company
-        st.session_state.active_campaign_id = None
-        st.session_state.active_status_filter = "Всички"
-        st.rerun()
+        if st.button("➕ Нова обява", type="secondary", use_container_width=True):
+            create_position_modal(st.session_state.active_company if st.session_state.active_company != "ВСИЧКИ" else "REN")
 
     st.divider()
 
-    # -------------------------------------------------------------------------
-    # 4. СПИСЪК С КАМПАНИИ
-    # -------------------------------------------------------------------------
+    # 3. СПИСЪК С ОБЯВИ
     col_search, col_toggle = st.columns([3, 1])
-    with col_search:
-        search_term = st.text_input("🔍 Търсене на кампания...")
-    with col_toggle:
-        show_archived = st.toggle("Покажи архивирани", value=False)
+    with col_search: search_term = st.text_input("🔍 Търсене на обява...")
+    with col_toggle: show_archived = st.toggle("Покажи архивирани", value=False)
 
-    # Заявка, съобразена с РЕАЛНАТА база (is_deleted и status)
-    query = supabase.table("hr_positions").select("*").eq("company_name", st.session_state.active_company).eq("is_deleted", False)
+    query = supabase.table("hr_positions").select("*").eq("is_deleted", False)
+    if st.session_state.active_company != "ВСИЧКИ":
+        query = query.eq("company_name", st.session_state.active_company)
     if not show_archived:
         query = query.eq("status", "Активна")
         
     positions = query.execute().data
 
     if not positions:
-        st.info(f"Няма активни кампании за {st.session_state.active_company}.")
+        st.info(f"Няма активни обяви.")
         st.stop()
 
     if search_term:
@@ -87,16 +72,16 @@ def run_recruitment():
         if prio == "Висок": return "⚡"
         return "🟢"
 
-    pos_options = {p['id']: f"{get_prio_icon(p.get('priority', 'Нормален'))} {p['title']} ({p.get('city', 'София')})" for p in positions}
+    pos_options = {p['id']: f"{get_prio_icon(p.get('priority', 'Нормален'))} {p['title']} | {p.get('city', 'София')} ({p.get('base_location', '-')}) | EUR {p.get('salary_min', '0')} - {p.get('salary_max', '0')}" for p in positions}
     
     if not pos_options:
-        st.warning("Няма кампании по този филтър.")
+        st.warning("Няма обяви по този филтър.")
         st.stop()
 
     current_pos_id = st.session_state.active_campaign_id
     start_index = list(pos_options.keys()).index(current_pos_id) if current_pos_id in pos_options else 0
 
-    selected_pos_id = st.selectbox("📂 Изберете кампания:", options=list(pos_options.keys()), format_func=lambda x: pos_options[x], index=start_index)
+    selected_pos_id = st.selectbox("📂 Изберете обява:", options=list(pos_options.keys()), format_func=lambda x: pos_options[x], index=start_index)
 
     if selected_pos_id != st.session_state.active_campaign_id:
         st.session_state.active_campaign_id = selected_pos_id
@@ -109,10 +94,46 @@ def run_recruitment():
             
     st.divider()
 
-    # -------------------------------------------------------------------------
-    # 5. КАНДИДАТИ
-    # -------------------------------------------------------------------------
-    st.markdown(f"### 👥 Кандидати: {selected_pos_data.get('title', '')}")
+    # 4. ЪПЛОУД НА КАНДИДАТИ
+    if check_permission("recruitment", "manage_positions"):
+        with st.expander("📥 Добави нови кандидати (Upload)", expanded=False):
+            uploaded_files = st.file_uploader("Качете ZIP (Jobs.bg), CSV или XLSX файлове", accept_multiple_files=True, type=['zip', 'csv', 'xlsx'])
+            
+            if uploaded_files and st.button("🚀 Обработи и запиши", type="primary"):
+                with st.spinner("Парсване и запис в базата..."):
+                    success_count = 0
+                    for file in uploaded_files:
+                        extracted_cands = []
+                        if file.name.lower().endswith('.zip'): extracted_cands = [parse_jobs_zip(file)]
+                        elif file.name.lower().endswith(('.csv', '.xlsx')): extracted_cands = parse_spreadsheet(file)
+                        
+                        for cand in extracted_cands:
+                            name, cv_data, photo = cand
+                            cand_insert = supabase.table("hr_candidates").insert({
+                                "full_name": name,
+                                "source": "Uploaded",
+                                "raw_cv_data": cv_data,
+                                "photo_thumbnail": photo
+                            }).execute()
+                            
+                            if cand_insert.data:
+                                cand_id = cand_insert.data[0]['id']
+                                supabase.table("hr_applications").insert({
+                                    "candidate_id": cand_id,
+                                    "position_id": selected_pos_id,
+                                    "status": "Нов",
+                                    "is_deleted": False,
+                                    "interview_details": {}
+                                }).execute()
+                                success_count += 1
+                                
+                st.success(f"Успешно добавени {success_count} кандидати към обявата!")
+                st.rerun()
+                
+    st.divider()
+
+    # 5. КАНДИДАТИ ПО ОБЯВАТА
+    st.markdown(f"### 👥 Кандидати")
     all_statuses = ["Всички", "Нов", "Установи контакт", "Възможно интервю", "Избран за интервю", "Потвърдено интервю", "Направено предложение", "Отхвърлен", "Отказал", "Преместен"]
 
     status_index = all_statuses.index(st.session_state.active_status_filter) if st.session_state.active_status_filter in all_statuses else 0
@@ -135,4 +156,4 @@ def run_recruitment():
             full_name = cand.get('full_name', 'Неизвестен кандидат')
             btn_label = f"👤 {full_name} | {app.get('status', 'Нов')}"
             if st.button(btn_label, key=f"btn_cand_{app['id']}", use_container_width=True):
-                candidate_card_modal(cand, app)
+                candidate_card_modal(cand, app, selected_pos_data)
