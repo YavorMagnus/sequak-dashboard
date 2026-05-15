@@ -33,12 +33,12 @@ def edit_position_modal(pos_data):
                         apps_res = supabase.table("hr_applications").select("candidate_id").eq("position_id", pos_data['id']).execute()
                         cand_ids = [app['candidate_id'] for app in apps_res.data] if apps_res.data else []
 
-                        # 2. Трием връзките
+                        # 2. Трием връзките в hr_applications
                         supabase.table("hr_applications").delete().eq("position_id", pos_data['id']).execute()
 
-                        # 3. Трием самите кандидати
-                        if cand_ids:
-                            supabase.table("hr_candidates").delete().in_("id", cand_ids).execute()
+                        # 3. Трием самите кандидати един по един (100% сигурен метод срещу UUID silent fail)
+                        for c_id in cand_ids:
+                            supabase.table("hr_candidates").delete().eq("id", c_id).execute()
 
                         # 4. Трием обявата
                         supabase.table("hr_positions").delete().eq("id", pos_data['id']).execute()
@@ -112,9 +112,9 @@ def edit_position_modal(pos_data):
                     # 2. Трием връзките
                     supabase.table("hr_applications").delete().eq("position_id", pos_data['id']).execute()
 
-                    # 3. Трием самите кандидати
-                    if cand_ids:
-                        supabase.table("hr_candidates").delete().in_("id", cand_ids).execute()
+                    # 3. Трием самите кандидати (с цикъл за пълна сигурност)
+                    for c_id in cand_ids:
+                        supabase.table("hr_candidates").delete().eq("id", c_id).execute()
 
                     # 4. Трием обявата
                     supabase.table("hr_positions").delete().eq("id", pos_data['id']).execute()
