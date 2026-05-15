@@ -50,16 +50,15 @@ def edit_position_modal(pos_data):
                 st.rerun()
 
 # -----------------------------------------------------------------------------
-# 2. ИНТЕЛИГЕНТЕН КАРТОН НА КАНДИДАТА (ЕТАП 2)
+# 2. ИНТЕЛИГЕНТЕН КАРТОН НА КАНДИДАТА
 # -----------------------------------------------------------------------------
 @st.dialog("Картон на кандидата", width="large")
 def candidate_card_modal(candidate, app_data, pos_data=None):
-    # Данни
     cv_data = candidate.get('raw_cv_data') or {}
     int_details = app_data.get('interview_details') or {}
-    manual_scores = app_data.get('manual_score') or {} # JSONB колоната за 8-те слайдера
+    manual_scores = app_data.get('manual_score') or {}
     
-    # --- ХЕДЪР (СТАТИЧНА ЧАСТ) ---
+    # --- ХЕДЪР ---
     col_photo, col_info, col_status = st.columns([1, 2, 1.5])
     
     with col_photo:
@@ -79,11 +78,10 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
         if next_int:
             st.warning(f"📅 Интервю: {next_int} в {int_details.get('interview_time', '')}")
         
-        # Обща оценка
         total_score = sum(manual_scores.values()) if manual_scores else 0
         st.metric("Обща оценка", f"{total_score}/48", f"{int(total_score/48*100)}%")
 
-    # --- НАВИГАЦИЯ (ТАБОВЕ) ---
+    # --- ТАБОВЕ ---
     tab_quest, tab_cv, tab_eval, tab_int, tab_status = st.tabs([
         "📝 Въпросник", "📄 CV", "📊 Оценка и Бележки", "📅 Интервюта", "⚙️ Статус"
     ])
@@ -106,7 +104,6 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
             cols = st.columns(2)
             for i, comp in enumerate(competencies):
                 with cols[i % 2]:
-                    # Връщаме слайдерите на 1 по подразбиране, ако няма запис
                     val = manual_scores.get(comp, 1)
                     new_scores[comp] = st.slider(comp, 1, 6, val)
             
@@ -145,42 +142,34 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
         curr_idx = statuses.index(app_data.get('status', 'Нов')) if app_data.get('status') in statuses else 0
         new_status = st.selectbox("Изберете нов статус", statuses, index=curr_idx)
         
-        # Специфични полета за Отхвърлен (ЕТАП 3 - ЗАРЕЖДАНЕ ОТ hr_settings)
         rejection_reason_index = 0
         reasons_list = []
         is_reserve_value = False
         
         if new_status == "Отхвърлен":
-            # 1. Зареждаме причините от базата
+            # КОРИГИРАНА ЗАЯВКА - чете от setting_value и reject_reasons
             try:
-                settings_data = supabase.table("hr_settings").select("settings_data").eq("setting_key", "rejection_reasons").execute()
+                settings_data = supabase.table("hr_settings").select("setting_value").eq("setting_key", "reject_reasons").execute()
                 if settings_data.data:
-                    # JSONB колоната се парсва автоматично в Python списък
-                    reasons_list = settings_data.data[0].get("settings_data", [])
+                    reasons_list = settings_data.data[0].get("setting_value", [])
             except Exception as e:
                 st.error(f"Грешка при зареждане на причини: {e}")
             
             if not reasons_list:
-                # Fallback, ако базата е празна
                 reasons_list = ["Друго"]
             
-            # 2. Установяваме текущо избраната причина (ако има такава в interview_details)
             current_reason = int_details.get('rejection_reason')
             if current_reason and current_reason in reasons_list:
                 rejection_reason_index = reasons_list.index(current_reason)
                 
-            # 3. Визуализираме selectbox
             st.selectbox("Причина за отхвърляне", reasons_list, index=rejection_reason_index, key=f"sel_reason_{app_data['id']}")
             
-            # 4. Визуализираме "Запази като резерва"
             is_reserve_value = int_details.get('reserve_checkbox', False)
-            st.checkbox("Запази като резерва ⭐", value=is_reserve_value, key=f"check_reserve_{app_data['id']}")
+            # Замяна на звездата с ❓
+            st.checkbox("Запази като резерва ❓", value=is_reserve_value, key=f"check_reserve_{app_data['id']}")
             
         if st.button("🔄 Промени статуса", use_container_width=True, type="primary"):
-            
-            # Обновяваме interview_details при Отхвърлен
             if new_status == "Отхвърлен":
-                # Достъпваме стойностите чрез session_state ключовете, зададени по-горе
                 if f"sel_reason_{app_data['id']}" in st.session_state:
                     int_details['rejection_reason'] = st.session_state[f"sel_reason_{app_data['id']}"]
                 if f"check_reserve_{app_data['id']}" in st.session_state:
@@ -194,7 +183,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
             st.success(f"Статусът е променен на {new_status}")
             st.rerun()
 
-    # --- ИНФО ЛЕНТА (НАЙ-ОТДОЛУ) ---
+    # --- ИНФО ЛЕНТА ---
     if pos_data:
         st.divider()
         st.info(f"📍 **Обява:** {pos_data.get('title', '')} | **Град:** {pos_data.get('city', '')} | **Заплата:** {pos_data.get('salary_min', '')}-{pos_data.get('salary_max', '')} EUR")
