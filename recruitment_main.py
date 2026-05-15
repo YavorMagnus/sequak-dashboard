@@ -248,16 +248,20 @@ def run_recruitment():
             
         pill_options = [f"Всички ({status_counts['Всички']})"] + [f"{s} ({status_counts[s]})" for s in base_statuses]
         
-        if "gallery_filter" not in st.session_state:
-            st.session_state.gallery_filter = pill_options[0]
+        # ЗАЩИТА СРЕЩУ СРИВ (Запомняме само базовата дума, без числата)
+        if "gallery_base_status" not in st.session_state:
+            st.session_state.gallery_base_status = "Всички"
             
-        selected_pill = st.pills("Филтър по статус:", pill_options, default=st.session_state.gallery_filter, selection_mode="single")
+        # Намираме актуалното хапче, което започва с тази базова дума
+        default_pill = next((p for p in pill_options if p.startswith(st.session_state.gallery_base_status + " (")), pill_options[0])
         
-        if not selected_pill:
-            selected_pill = pill_options[0]
+        selected_pill = st.pills("Филтър по статус:", pill_options, default=default_pill, selection_mode="single")
+        
+        if selected_pill:
+            st.session_state.gallery_base_status = selected_pill.rsplit(" (", 1)[0]
+        else:
+            selected_pill = default_pill
             
-        st.session_state.gallery_filter = selected_pill
-        
         active_status_name = selected_pill.rsplit(" (", 1)[0]
         
         if active_status_name == "Всички":
