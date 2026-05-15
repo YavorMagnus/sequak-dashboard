@@ -28,11 +28,27 @@ def edit_position_modal(pos_data):
         with col_hard:
             if check_permission("recruitment", "hard_delete"):
                 if st.button("☢️ Окончателно изтриване", use_container_width=True):
-                    supabase.table("hr_positions").delete().eq("id", pos_data['id']).execute()
-                    st.session_state.active_campaign_id = None
-                    st.success("Обявата е изтрита физически от базата данни.")
-                    st.rerun()
-        return # Спираме изпълнението тук, за да не показваме формата за редакция
+                    try:
+                        # 1. Взимаме ID-тата на всички кандидати за тази обява
+                        apps_res = supabase.table("hr_applications").select("candidate_id").eq("position_id", pos_data['id']).execute()
+                        cand_ids = [app['candidate_id'] for app in apps_res.data] if apps_res.data else []
+
+                        # 2. Трием връзките
+                        supabase.table("hr_applications").delete().eq("position_id", pos_data['id']).execute()
+
+                        # 3. Трием самите кандидати
+                        if cand_ids:
+                            supabase.table("hr_candidates").delete().in_("id", cand_ids).execute()
+
+                        # 4. Трием обявата
+                        supabase.table("hr_positions").delete().eq("id", pos_data['id']).execute()
+
+                        st.session_state.active_campaign_id = None
+                        st.success("Обявата и всички нейни кандидати са изтрити физически от базата данни.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Грешка при изтриване: {e}")
+        return # Спираме изпълнението тук
 
     # НОРМАЛНА РЕДАКЦИЯ
     st.markdown(f"### ⚙️ Редакция: {pos_data.get('title', 'Неизвестна обява')}")
@@ -88,10 +104,26 @@ def edit_position_modal(pos_data):
     with col_del2:
         if check_permission("recruitment", "hard_delete"):
             if st.button("☢️ Окончателно изтриване (Hard Delete)", key="btn_hard_del_pos", type="primary", use_container_width=True):
-                supabase.table("hr_positions").delete().eq("id", pos_data['id']).execute()
-                st.session_state.active_campaign_id = None
-                st.success("Обявата е изтрита физически от базата данни.")
-                st.rerun()
+                try:
+                    # 1. Взимаме ID-тата на всички кандидати за тази обява
+                    apps_res = supabase.table("hr_applications").select("candidate_id").eq("position_id", pos_data['id']).execute()
+                    cand_ids = [app['candidate_id'] for app in apps_res.data] if apps_res.data else []
+
+                    # 2. Трием връзките
+                    supabase.table("hr_applications").delete().eq("position_id", pos_data['id']).execute()
+
+                    # 3. Трием самите кандидати
+                    if cand_ids:
+                        supabase.table("hr_candidates").delete().in_("id", cand_ids).execute()
+
+                    # 4. Трием обявата
+                    supabase.table("hr_positions").delete().eq("id", pos_data['id']).execute()
+
+                    st.session_state.active_campaign_id = None
+                    st.success("Обявата и всички нейни кандидати са изтрити физически от базата данни.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Грешка при изтриване: {e}")
 
 # -----------------------------------------------------------------------------
 # 2. ИНТЕЛИГЕНТЕН КАРТОН НА КАНДИДАТА
@@ -238,9 +270,16 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
         with col_cdel2:
             if check_permission("recruitment", "hard_delete"):
                 if st.button("☢️ Окончателно изтриване", type="primary", key=f"hard_del_cand_{app_data['id']}", use_container_width=True):
-                    supabase.table("hr_applications").delete().eq("id", app_data['id']).execute()
-                    st.success("Кандидатурата е изтрита физически.")
-                    st.rerun()
+                    try:
+                        # 1. Изтриваме връзката
+                        supabase.table("hr_applications").delete().eq("id", app_data['id']).execute()
+                        # 2. Изтриваме физически самия човек
+                        supabase.table("hr_candidates").delete().eq("id", app_data['candidate_id']).execute()
+                        
+                        st.success("Кандидатурата е изтрита физически.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Грешка при изтриване: {e}")
 
     # --- ИНФО ЛЕНТА ---
     if pos_data:
