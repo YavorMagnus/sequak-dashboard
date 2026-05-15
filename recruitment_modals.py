@@ -37,9 +37,9 @@ def edit_position_modal(pos_data):
 
                         supabase.table("hr_applications").delete().eq("position_id", pos_data['id']).execute()
                         
-                        # Изчистваме и коментарите за тези кандидати
+                        # Изчистваме и коментарите за тези кандидати (коригирано на owner_id)
                         if cand_ids:
-                            supabase.table("hr_comments").delete().in_("candidate_id", cand_ids).execute()
+                            supabase.table("hr_comments").delete().in_("owner_id", cand_ids).execute()
                             for c_id in cand_ids:
                                 supabase.table("hr_candidates").delete().eq("id", c_id).execute()
 
@@ -108,7 +108,7 @@ def edit_position_modal(pos_data):
                     supabase.table("hr_applications").delete().eq("position_id", pos_data['id']).execute()
                     
                     if cand_ids:
-                        supabase.table("hr_comments").delete().in_("candidate_id", cand_ids).execute()
+                        supabase.table("hr_comments").delete().in_("owner_id", cand_ids).execute()
                         for c_id in cand_ids:
                             supabase.table("hr_candidates").delete().eq("id", c_id).execute()
 
@@ -161,8 +161,8 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
 
     st.divider()
 
-    # Извличане на бележките за страничната лента
-    comments_res = supabase.table("hr_comments").select("*").eq("candidate_id", candidate['id']).order("created_at", desc=True).execute()
+    # Извличане на бележките за страничната лента (ВРЪЗКАТА Е ПОПРАВЕНА НА owner_id)
+    comments_res = supabase.table("hr_comments").select("*").eq("owner_id", candidate['id']).order("created_at", desc=True).execute()
     all_comments = comments_res.data if comments_res.data else []
 
     # --- РАЗПРЕДЕЛЕНИЕ С КОЛОНИ (3:1) ЗА ЛЕНТАТА ЗА БЕЛЕЖКИ ---
@@ -236,7 +236,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
             if st.button("➕ Добави бележка", type="primary"):
                 if new_comment.strip():
                     supabase.table("hr_comments").insert({
-                        "candidate_id": candidate['id'],
+                        "owner_id": candidate['id'], # КОРИГИРАНО
                         "author": st.session_state.username,
                         "comment": new_comment.strip()
                     }).execute()
@@ -266,9 +266,14 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                 
                 if st.button("📞 Насрочи обаждане", type="primary", use_container_width=True):
                     int_details.update({'ph_date': ph_date.strftime("%Y-%m-%d"), 'ph_time': ph_time, 'interview_type': 'Телефонно'})
-                    # --- [HOOK-NOTIFICATION]: Установи контакт -> Нотифицира контактьора (HR). ---
-                    supabase.table("hr_applications").update({"interview_details": int_details, "status": "Установи контакт"}).eq("id", app_data['id']).execute()
-                    st.success("Телефонното обаждане е насрочено! Статусът е променен.")
+                    
+                    # --- [HOOK-NOTIFICATION]: Възможно интервю ---
+                    supabase.table("hr_applications").update({
+                        "interview_details": int_details, 
+                        "status": "Възможно интервю"
+                    }).eq("id", app_data['id']).execute()
+                    
+                    st.success("Телефонното обаждане е насрочено! Статусът е променен на 'Възможно интервю'.")
                     st.rerun()
 
             # АКОРДЕОН 2: ПОКАНА ОТ МЕНИДЖЪР
@@ -276,10 +281,12 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                 st.markdown("Предложете две алтернативни дати и часови диапазони на HR-а:")
                 c1, c2 = st.columns(2)
                 with c1:
-                    m_d1 = st.date_input("Опция 1: Дата", key=f"md1_{app_data['id']}")
+                    d1_val = datetime.strptime(int_details['mgr_date1'], "%Y-%m-%d").date() if int_details.get('mgr_date1') else datetime.now()
+                    m_d1 = st.date_input("Опция 1: Дата", value=d1_val, key=f"md1_{app_data['id']}")
                     m_t1 = st.text_input("Опция 1: Диапазон (напр. след 14:00)", value=int_details.get('mgr_range1', ''), key=f"mt1_{app_data['id']}")
                 with c2:
-                    m_d2 = st.date_input("Опция 2: Дата", key=f"md2_{app_data['id']}")
+                    d2_val = datetime.strptime(int_details['mgr_date2'], "%Y-%m-%d").date() if int_details.get('mgr_date2') else datetime.now()
+                    m_d2 = st.date_input("Опция 2: Дата", value=d2_val, key=f"md2_{app_data['id']}")
                     m_t2 = st.text_input("Опция 2: Диапазон (напр. 10:00 - 12:00)", value=int_details.get('mgr_range2', ''), key=f"mt2_{app_data['id']}")
                 
                 if st.button("💡 Предложи интервю", type="primary", use_container_width=True):
@@ -287,9 +294,14 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                         'mgr_date1': m_d1.strftime("%Y-%m-%d"), 'mgr_range1': m_t1,
                         'mgr_date2': m_d2.strftime("%Y-%m-%d"), 'mgr_range2': m_t2
                     })
+                    
                     # --- [HOOK-NOTIFICATION]: Избран за интервю -> Нотифицира контактьора (HR). ---
-                    supabase.table("hr_applications").update({"interview_details": int_details, "status": "Избран за интервю"}).eq("id", app_data['id']).execute()
-                    st.success("Предложението е изпратено към HR! Статусът е променен.")
+                    supabase.table("hr_applications").update({
+                        "interview_details": int_details, 
+                        "status": "Избран за интервю"
+                    }).eq("id", app_data['id']).execute()
+                    
+                    st.success("Предложението е изпратено към HR! Статусът е променен на 'Избран за интервю'.")
                     st.rerun()
 
             # АКОРДЕОН 3: НАСРОЧВАНЕ НА ОФИЦИАЛНО ИНТЕРВЮ
@@ -317,8 +329,13 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                         'interview_time': new_time,
                         'interview_type': 'Официално'
                     })
+                    
                     # --- [HOOK-NOTIFICATION]: Потвърдено интервю -> Нотифицира избрания интервюиращ (Мениджър). ---
-                    supabase.table("hr_applications").update({"interview_details": int_details, "status": "Потвърдено интервю"}).eq("id", app_data['id']).execute()
+                    supabase.table("hr_applications").update({
+                        "interview_details": int_details, 
+                        "status": "Потвърдено интервю"
+                    }).eq("id", app_data['id']).execute()
+                    
                     st.success("Интервюто е официално насрочено и вписано в Графика! Статусът е променен.")
                     st.rerun()
 
@@ -362,7 +379,6 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
 
                     if st.button(btn_label, type="primary"):
                         if keep_copy:
-                            # Създаваме нов запис (копие) за таргет обявата
                             supabase.table("hr_applications").insert({
                                 "candidate_id": candidate['id'],
                                 "position_id": target_id,
@@ -370,20 +386,19 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                                 "is_deleted": False,
                                 "interview_details": {}
                             }).execute()
-                            # --- [HOOK-NOTIFICATION]: Преместен (С Копие) -> Нотифицира мениджъра на ТАРГЕТ-обявата. ---
+                            # --- [HOOK-NOTIFICATION]: Преместен (С Копие) -> Нотифицира мениджъра на ТАРГЕТ-обявата и контактьора. ---
                             st.success("Кандидатът е успешно копиран в новата обява!")
                         else:
-                            # Местим го физически (променяме position_id)
-                            # --- [HOOK-NOTIFICATION]: Преместен (Без Копие) -> Нотифицира мениджъра на ТАРГЕТ-обявата. ---
+                            # --- [HOOK-NOTIFICATION]: Преместен (Без Копие) -> Нотифицира мениджъра на ТАРГЕТ-обявата и контактьора. ---
                             supabase.table("hr_applications").update({
                                 "position_id": target_id,
                                 "status": "Нов",
-                                "interview_details": {} # Нулираме детайлите за интервюто в новата обява
+                                "interview_details": {} 
                             }).eq("id", app_data['id']).execute()
                             st.success("Кандидатът е окончателно преместен!")
                         st.rerun()
 
-            # Бутон за стандартните статуси (всички без "Преместен")
+            # Бутон за стандартните статуси
             if new_status != "Преместен":
                 if st.button("🔄 Запази статуса", use_container_width=True, type="primary"):
                     if new_status == "Отхвърлен":
@@ -392,7 +407,8 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                         if f"check_reserve_{app_data['id']}" in st.session_state:
                             int_details['reserve_checkbox'] = st.session_state[f"check_reserve_{app_data['id']}"]
                     
-                    # --- [HOOK-NOTIFICATION]: Нов -> Нотифицира мениджъра И контактьора. ---
+                    # --- [HOOK-NOTIFICATION]: Нов -> Нотифицира мениджъра И контактьора.
+                    # --- [HOOK-NOTIFICATION]: Установи контакт -> Нотифицира само контактьора.
                     supabase.table("hr_applications").update({"status": new_status, "interview_details": int_details}).eq("id", app_data['id']).execute()
                     st.success(f"Статусът е променен на {new_status}")
                     st.rerun()
@@ -412,8 +428,8 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                 if st.button("☢️ Окончателно изтриване", type="primary", key=f"hard_del_cand_{app_data['id']}", use_container_width=True):
                     try:
                         supabase.table("hr_applications").delete().eq("id", app_data['id']).execute()
-                        # Изчистваме коментарите
-                        supabase.table("hr_comments").delete().eq("candidate_id", app_data['candidate_id']).execute()
+                        # Изчистваме коментарите (коригирано на owner_id)
+                        supabase.table("hr_comments").delete().eq("owner_id", app_data['candidate_id']).execute()
                         supabase.table("hr_candidates").delete().eq("id", app_data['candidate_id']).execute()
                         st.success("Кандидатурата е изтрита физически.")
                         st.rerun()
