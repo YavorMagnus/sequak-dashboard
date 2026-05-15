@@ -4,6 +4,8 @@ from utils import supabase, check_permission
 from recruitment_modals import edit_position_modal, candidate_card_modal, create_position_modal
 # ИМПОРТ САМО НА СТАРИТЕ, РАБОТЕЩИ ПАРСЪРИ
 from parsers import parse_jobs_zip, parse_spreadsheet
+# НОВО: Импорт на модула за календара
+from recruitment_calendar import render_interview_calendar
 
 # ДЕФИНИРАНЕ НА CSS ЗА КАНБАН ДЪСКАТА И БУТОНИТЕ
 KANBAN_CSS = """
@@ -84,7 +86,15 @@ div[data-testid="stPills"] {
 
 def run_recruitment():
     st.markdown(KANBAN_CSS, unsafe_allow_html=True)
-    st.title("🎯 Подбор на персонал (Recruitment)")
+    
+    # ОБНОВЕНО: Заглавието и бутонът за Календара са разположени в две колони
+    col_title, col_cal = st.columns([4, 1])
+    with col_title:
+        st.title("🎯 Подбор на персонал (Recruitment)")
+    with col_cal:
+        st.write("<br>", unsafe_allow_html=True)
+        if st.button("📅 График интервюта", type="primary", use_container_width=True):
+            render_interview_calendar()
     
     # --- ИНИЦИАЛИЗАЦИЯ НА СЕСИЯТА ---
     if "active_company" not in st.session_state:
@@ -131,21 +141,17 @@ def run_recruitment():
     with col_toggle1: 
         show_archived = st.toggle("Архивирани", value=False)
     with col_toggle2:
-        # Показваме Кошчето само за висшите роли
         show_trash = False
         if st.session_state.get("user_role") in ["Супер-админ", "Администратор"]:
             show_trash = st.toggle("🗑️ Кошче", value=False)
 
-    # ИЗГРАЖДАНЕ НА ЗАЯВКАТА (Query)
     query = supabase.table("hr_positions").select("*")
     if st.session_state.active_company != "ВСИЧКИ":
         query = query.eq("company_name", st.session_state.active_company)
         
     if show_trash:
-        # Ако сме в режим Кошче, показваме само изтритите
         query = query.eq("is_deleted", True)
     else:
-        # Нормален режим - крием изтритите
         query = query.eq("is_deleted", False)
         if not show_archived:
             query = query.eq("status", "Активна")
@@ -188,7 +194,6 @@ def run_recruitment():
     st.divider()
 
     # --- 4. ЪПЛОУД НА КАНДИДАТИ ---
-    # Блокираме ъплоуда, ако обявата е изтрита
     if check_permission("recruitment", "upload_candidates") and not selected_pos_data.get('is_deleted', False):
         with st.expander("📥 Добави нови кандидати (Upload)", expanded=False):
             uploaded_files = st.file_uploader("Качете ZIP (Jobs.bg), CSV или XLSX файлове", accept_multiple_files=True, type=['zip', 'csv', 'xlsx'])
