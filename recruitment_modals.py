@@ -29,18 +29,14 @@ def edit_position_modal(pos_data):
             if check_permission("recruitment", "hard_delete"):
                 if st.button("☢️ Окончателно изтриване", use_container_width=True):
                     try:
-                        # 1. Взимаме ID-тата на всички кандидати за тази обява
                         apps_res = supabase.table("hr_applications").select("candidate_id").eq("position_id", pos_data['id']).execute()
                         cand_ids = [app['candidate_id'] for app in apps_res.data] if apps_res.data else []
 
-                        # 2. Трием връзките в hr_applications
                         supabase.table("hr_applications").delete().eq("position_id", pos_data['id']).execute()
 
-                        # 3. Трием самите кандидати един по един (100% сигурен метод срещу UUID silent fail)
                         for c_id in cand_ids:
                             supabase.table("hr_candidates").delete().eq("id", c_id).execute()
 
-                        # 4. Трием обявата
                         supabase.table("hr_positions").delete().eq("id", pos_data['id']).execute()
 
                         st.session_state.active_campaign_id = None
@@ -48,7 +44,7 @@ def edit_position_modal(pos_data):
                         st.rerun()
                     except Exception as e:
                         st.error(f"Грешка при изтриване: {e}")
-        return # Спираме изпълнението тук
+        return
 
     # НОРМАЛНА РЕДАКЦИЯ
     st.markdown(f"### ⚙️ Редакция: {pos_data.get('title', 'Неизвестна обява')}")
@@ -105,18 +101,14 @@ def edit_position_modal(pos_data):
         if check_permission("recruitment", "hard_delete"):
             if st.button("☢️ Окончателно изтриване (Hard Delete)", key="btn_hard_del_pos", type="primary", use_container_width=True):
                 try:
-                    # 1. Взимаме ID-тата на всички кандидати за тази обява
                     apps_res = supabase.table("hr_applications").select("candidate_id").eq("position_id", pos_data['id']).execute()
                     cand_ids = [app['candidate_id'] for app in apps_res.data] if apps_res.data else []
 
-                    # 2. Трием връзките
                     supabase.table("hr_applications").delete().eq("position_id", pos_data['id']).execute()
 
-                    # 3. Трием самите кандидати (с цикъл за пълна сигурност)
                     for c_id in cand_ids:
                         supabase.table("hr_candidates").delete().eq("id", c_id).execute()
 
-                    # 4. Трием обявата
                     supabase.table("hr_positions").delete().eq("id", pos_data['id']).execute()
 
                     st.session_state.active_campaign_id = None
@@ -145,6 +137,11 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
             
     with col_info:
         st.subheader(candidate.get('full_name', 'Неизвестен'))
+        
+        # ДАННИТЕ ЗА ОБЯВАТА СА ТУК (Под името)
+        if pos_data:
+            st.markdown(f"<span style='color: #00aaff; font-weight: bold;'>Обява:</span> {pos_data.get('title', '')} ({pos_data.get('city', '')})", unsafe_allow_html=True)
+            
         st.write(f"📧 {cv_data.get('email', 'Няма')}")
         st.write(f"📱 {cv_data.get('phone', 'Няма')}")
         
@@ -157,16 +154,36 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
         total_score = sum(manual_scores.values()) if manual_scores else 0
         st.metric("Обща оценка", f"{total_score}/48", f"{int(total_score/48*100)}%")
 
+    st.divider()
+
     # --- ТАБОВЕ ---
     tab_quest, tab_cv, tab_eval, tab_int, tab_status = st.tabs([
         "📝 Въпросник", "📄 CV", "📊 Оценка и Бележки", "📅 Интервюта", "⚙️ Статус"
     ])
 
     with tab_quest:
-        st.markdown(cv_data.get('questionnaire', 'Няма въпросник.'))
+        edit_q = st.toggle("✏️ Редакция на Въпросника", key=f"edit_q_{app_data['id']}")
+        if edit_q:
+            new_q = st.text_area("Текст", value=cv_data.get('questionnaire', ''), height=200)
+            if st.button("💾 Запази Въпросника"):
+                cv_data['questionnaire'] = new_q
+                supabase.table("hr_candidates").update({"raw_cv_data": cv_data}).eq("id", candidate['id']).execute()
+                st.success("Въпросникът е обновен!")
+                st.rerun()
+        else:
+            st.markdown(cv_data.get('questionnaire', 'Няма въпросник.'))
 
     with tab_cv:
-        st.markdown(cv_data.get('cv_text', 'Няма текст на CV.'))
+        edit_cv = st.toggle("✏️ Редакция на CV", key=f"edit_cv_{app_data['id']}")
+        if edit_cv:
+            new_cv = st.text_area("Текст на CV", value=cv_data.get('cv_text', ''), height=300)
+            if st.button("💾 Запази CV"):
+                cv_data['cv_text'] = new_cv
+                supabase.table("hr_candidates").update({"raw_cv_data": cv_data}).eq("id", candidate['id']).execute()
+                st.success("CV-то е обновено!")
+                st.rerun()
+        else:
+            st.markdown(cv_data.get('cv_text', 'Няма текст на CV.'))
 
     with tab_eval:
         st.markdown("### 📊 Оценка по компетенции (1-6)")
@@ -196,21 +213,40 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                 st.rerun()
 
     with tab_int:
-        st.markdown("### 📅 Планиране на интервю")
-        with st.form(key=f"int_form_{app_data['id']}"):
-            d = st.date_input("Дата", value=datetime.now())
-            t = st.time_input("Час")
-            interviewer = st.text_input("Интервюиращ", value=int_details.get('interviewer_name', ''))
+        st.markdown("### 📞 1. Телефонно интервю (Скрининг)")
+        new_phone_notes = st.text_area("Бележки от телефонен разговор (HR)", value=int_details.get('phone_notes', ''), height=100, key=f"ph_{app_data['id']}")
+        
+        st.markdown("### 💡 2. Предложение от Мениджър")
+        new_mgr_dates = st.text_input("Предпочитани дати/часове (зададени от Мениджър)", value=int_details.get('mgr_dates', ''), key=f"mgr_{app_data['id']}")
+        
+        st.markdown("### 📅 3. Насрочване на официално интервю (HR)")
+        
+        # Взимаме потребителите за падащото меню
+        users_res = supabase.table("users").select("username").execute()
+        all_users = [u['username'] for u in users_res.data] if users_res.data else []
+        c_int = int_details.get('interviewer_name', '')
+        c_idx = all_users.index(c_int) if c_int in all_users else 0
+        new_interviewer = st.selectbox("Интервюиращ", [""] + all_users, index=c_idx + 1 if c_int else 0)
+        
+        col_d, col_t = st.columns(2)
+        with col_d:
+            d_val = datetime.strptime(int_details['interview_date'], "%Y-%m-%d").date() if int_details.get('interview_date') else datetime.now()
+            new_date = st.date_input("Дата", value=d_val)
+        with col_t:
+            t_val = datetime.strptime(int_details['interview_time'], "%H:%M").time() if int_details.get('interview_time') else None
+            new_time = st.time_input("Час", value=t_val)
             
-            if st.form_submit_button("📅 Насрочи интервю"):
-                int_details.update({
-                    'interview_date': d.strftime("%Y-%m-%d"),
-                    'interview_time': t.strftime("%H:%M"),
-                    'interviewer_name': interviewer
-                })
-                supabase.table("hr_applications").update({"interview_details": int_details, "status": "Потвърдено интервю"}).eq("id", app_data['id']).execute()
-                st.success("Интервюто е насрочено!")
-                st.rerun()
+        if st.button("💾 Запази процеса по интервю", type="primary", use_container_width=True):
+            int_details.update({
+                'phone_notes': new_phone_notes,
+                'mgr_dates': new_mgr_dates,
+                'interviewer_name': new_interviewer,
+                'interview_date': new_date.strftime("%Y-%m-%d"),
+                'interview_time': new_time.strftime("%H:%M") if new_time else ""
+            })
+            supabase.table("hr_applications").update({"interview_details": int_details}).eq("id", app_data['id']).execute()
+            st.success("Графикът е обновен!")
+            st.rerun()
 
     with tab_status:
         st.markdown("### ⚙️ Смяна на статус")
@@ -271,20 +307,12 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
             if check_permission("recruitment", "hard_delete"):
                 if st.button("☢️ Окончателно изтриване", type="primary", key=f"hard_del_cand_{app_data['id']}", use_container_width=True):
                     try:
-                        # 1. Изтриваме връзката
                         supabase.table("hr_applications").delete().eq("id", app_data['id']).execute()
-                        # 2. Изтриваме физически самия човек
                         supabase.table("hr_candidates").delete().eq("id", app_data['candidate_id']).execute()
-                        
                         st.success("Кандидатурата е изтрита физически.")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Грешка при изтриване: {e}")
-
-    # --- ИНФО ЛЕНТА ---
-    if pos_data:
-        st.divider()
-        st.info(f"📍 **Обява:** {pos_data.get('title', '')} | **Град:** {pos_data.get('city', '')} | **Заплата:** {pos_data.get('salary_min', '')}-{pos_data.get('salary_max', '')} EUR")
 
 # -----------------------------------------------------------------------------
 # 3. СЪЗДАВАНЕ НА НОВА ОБЯВА
