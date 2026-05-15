@@ -4,7 +4,7 @@ from datetime import datetime
 from utils import supabase, check_permission
 
 # -----------------------------------------------------------------------------
-# 1. МОДАЛ ЗА РЕДАКЦИЯ НА ОБЯВА
+# 1. МОДАЛ ЗА РЕДАКЦИЯ НА ОБЯВА И ИЗТРИВАНЕ
 # -----------------------------------------------------------------------------
 @st.dialog("Редакция на обява", width="large")
 def edit_position_modal(pos_data):
@@ -47,6 +47,27 @@ def edit_position_modal(pos_data):
             res = supabase.table("hr_positions").update(update_data).eq("id", pos_data['id']).execute()
             if res.data:
                 st.success("Промените са записани!")
+                st.rerun()
+
+    # === ОПАСНА ЗОНА ЗА ОБЯВАТА ===
+    st.markdown("---")
+    st.markdown("#### 🗑️ Опасна зона")
+    
+    col_del1, col_del2 = st.columns(2)
+    with col_del1:
+        if check_permission("recruitment", "soft_delete"):
+            if st.button("🗑️ Премести в кошчето (Soft Delete)", key="btn_soft_del_pos", use_container_width=True):
+                supabase.table("hr_positions").update({"is_deleted": True}).eq("id", pos_data['id']).execute()
+                st.session_state.active_campaign_id = None
+                st.success("Обявата е преместена в кошчето.")
+                st.rerun()
+                
+    with col_del2:
+        if check_permission("recruitment", "hard_delete"):
+            if st.button("☢️ Окончателно изтриване (Hard Delete)", key="btn_hard_del_pos", type="primary", use_container_width=True):
+                supabase.table("hr_positions").delete().eq("id", pos_data['id']).execute()
+                st.session_state.active_campaign_id = None
+                st.success("Обявата е изтрита физически от базата данни.")
                 st.rerun()
 
 # -----------------------------------------------------------------------------
@@ -147,7 +168,6 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
         is_reserve_value = False
         
         if new_status == "Отхвърлен":
-            # КОРИГИРАНА ЗАЯВКА - чете от setting_value и reject_reasons
             try:
                 settings_data = supabase.table("hr_settings").select("setting_value").eq("setting_key", "reject_reasons").execute()
                 if settings_data.data:
@@ -165,7 +185,6 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
             st.selectbox("Причина за отхвърляне", reasons_list, index=rejection_reason_index, key=f"sel_reason_{app_data['id']}")
             
             is_reserve_value = int_details.get('reserve_checkbox', False)
-            # Замяна на звездата с ❓
             st.checkbox("Запази като резерва ❓", value=is_reserve_value, key=f"check_reserve_{app_data['id']}")
             
         if st.button("🔄 Промени статуса", use_container_width=True, type="primary"):
@@ -182,6 +201,23 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
             
             st.success(f"Статусът е променен на {new_status}")
             st.rerun()
+
+    # === ОПАСНА ЗОНА ЗА КАНДИДАТА ===
+    st.markdown("---")
+    with st.expander("🗑️ Управление на записа (Изтриване)", expanded=False):
+        col_cdel1, col_cdel2 = st.columns(2)
+        with col_cdel1:
+            if check_permission("recruitment", "soft_delete"):
+                if st.button("🗑️ Премести в кошчето", key=f"soft_del_cand_{app_data['id']}", use_container_width=True):
+                    supabase.table("hr_applications").update({"is_deleted": True}).eq("id", app_data['id']).execute()
+                    st.success("Кандидатът е скрит (Soft Delete).")
+                    st.rerun()
+        with col_cdel2:
+            if check_permission("recruitment", "hard_delete"):
+                if st.button("☢️ Окончателно изтриване", type="primary", key=f"hard_del_cand_{app_data['id']}", use_container_width=True):
+                    supabase.table("hr_applications").delete().eq("id", app_data['id']).execute()
+                    st.success("Кандидатурата е изтрита физически.")
+                    st.rerun()
 
     # --- ИНФО ЛЕНТА ---
     if pos_data:
