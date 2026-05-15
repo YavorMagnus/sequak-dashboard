@@ -67,7 +67,7 @@ div[data-is-reserve="true"] button {
     font-weight: bold;
 }
 
-/* === НОВО: УГОЛЕМЯВАНЕ НА PILLS (ФИЛТРИТЕ) === */
+/* === УГОЛЕМЯВАНЕ НА PILLS (ФИЛТРИТЕ) === */
 div[data-testid="stPills"] label {
     padding: 10px 20px !important;
     font-size: 16px !important;
@@ -77,7 +77,7 @@ div[data-testid="stPills"] label {
     justify-content: center !important;
 }
 div[data-testid="stPills"] {
-    gap: 12px; /* Повече разстояние между бутоните, за да "дишат" */
+    gap: 12px;
 }
 </style>
 """
@@ -124,32 +124,48 @@ def run_recruitment():
 
     st.divider()
 
-    # --- 3. СПИСЪК С ОБЯВИ ---
-    col_search, col_toggle = st.columns([3, 1])
-    with col_search: search_term = st.text_input("🔍 Търсене на обява...")
-    with col_toggle: show_archived = st.toggle("Покажи архивирани", value=False)
+    # --- 3. СПИСЪК С ОБЯВИ И КОШЧЕ ---
+    col_search, col_toggle1, col_toggle2 = st.columns([2, 1, 1])
+    with col_search: 
+        search_term = st.text_input("🔍 Търсене на обява...")
+    with col_toggle1: 
+        show_archived = st.toggle("Архивирани", value=False)
+    with col_toggle2:
+        # Показваме Кошчето само за висшите роли
+        show_trash = False
+        if st.session_state.get("user_role") in ["Супер-админ", "Администратор"]:
+            show_trash = st.toggle("🗑️ Кошче", value=False)
 
-    query = supabase.table("hr_positions").select("*").eq("is_deleted", False)
+    # ИЗГРАЖДАНЕ НА ЗАЯВКАТА (Query)
+    query = supabase.table("hr_positions").select("*")
     if st.session_state.active_company != "ВСИЧКИ":
         query = query.eq("company_name", st.session_state.active_company)
-    if not show_archived:
-        query = query.eq("status", "Активна")
+        
+    if show_trash:
+        # Ако сме в режим Кошче, показваме само изтритите
+        query = query.eq("is_deleted", True)
+    else:
+        # Нормален режим - крием изтритите
+        query = query.eq("is_deleted", False)
+        if not show_archived:
+            query = query.eq("status", "Активна")
         
     positions = query.execute().data
 
     if not positions:
-        st.info(f"Няма активни обяви по зададените критерии.")
+        st.info(f"Няма обяви по зададените критерии.")
         st.stop()
 
     if search_term:
         positions = [p for p in positions if search_term.lower() in p.get('title', '').lower() or search_term.lower() in p.get('city', '').lower()]
 
-    def get_prio_icon(prio):
+    def get_prio_icon(prio, is_del):
+        if is_del: return "🗑️"
         if prio == "Спешен": return "🔥"
         if prio == "Висок": return "⚡"
         return "🟢"
 
-    pos_options = {p['id']: f"{get_prio_icon(p.get('priority', 'Нормален'))} {p['title']} | {p.get('city', 'София')} ({p.get('base_location', '-')}) | EUR {p.get('salary_min', '0')} - {p.get('salary_max', '0')}" for p in positions}
+    pos_options = {p['id']: f"{get_prio_icon(p.get('priority', 'Нормален'), p.get('is_deleted', False))} {p['title']} | {p.get('city', 'София')} ({p.get('base_location', '-')}) | EUR {p.get('salary_min', '0')} - {p.get('salary_max', '0')}" for p in positions}
     
     if not pos_options:
         st.warning("Няма обяви по този филтър.")
@@ -172,7 +188,8 @@ def run_recruitment():
     st.divider()
 
     # --- 4. ЪПЛОУД НА КАНДИДАТИ ---
-    if check_permission("recruitment", "upload_candidates"):
+    # Блокираме ъплоуда, ако обявата е изтрита
+    if check_permission("recruitment", "upload_candidates") and not selected_pos_data.get('is_deleted', False):
         with st.expander("📥 Добави нови кандидати (Upload)", expanded=False):
             uploaded_files = st.file_uploader("Качете ZIP (Jobs.bg), CSV или XLSX файлове", accept_multiple_files=True, type=['zip', 'csv', 'xlsx'])
             
