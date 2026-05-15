@@ -12,6 +12,29 @@ def edit_position_modal(pos_data):
         st.error("Нямате права за редакция на обяви.")
         return
 
+    # АКО ОБЯВАТА Е В КОШЧЕТО - ПОКАЗВАМЕ САМО ВЪЗСТАНОВЯВАНЕ И ХАРД ДИЛИЙТ
+    if pos_data.get('is_deleted', False):
+        st.warning("⚠️ Тази обява се намира в Кошчето. За да работите с нея, първо я възстановете.")
+        st.markdown(f"### 🗑️ {pos_data.get('title', 'Неизвестна обява')}")
+        st.divider()
+        
+        col_res, col_hard = st.columns(2)
+        with col_res:
+            if st.button("♻️ Възстанови обявата", type="primary", use_container_width=True):
+                supabase.table("hr_positions").update({"is_deleted": False}).eq("id", pos_data['id']).execute()
+                st.success("Обявата е възстановена!")
+                st.rerun()
+                
+        with col_hard:
+            if check_permission("recruitment", "hard_delete"):
+                if st.button("☢️ Окончателно изтриване", use_container_width=True):
+                    supabase.table("hr_positions").delete().eq("id", pos_data['id']).execute()
+                    st.session_state.active_campaign_id = None
+                    st.success("Обявата е изтрита физически от базата данни.")
+                    st.rerun()
+        return # Спираме изпълнението тук, за да не показваме формата за редакция
+
+    # НОРМАЛНА РЕДАКЦИЯ
     st.markdown(f"### ⚙️ Редакция: {pos_data.get('title', 'Неизвестна обява')}")
     
     with st.form(key=f"form_edit_pos_{pos_data.get('id', 'new')}"):
