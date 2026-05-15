@@ -5,7 +5,85 @@ from recruitment_modals import edit_position_modal, candidate_card_modal, create
 # ИМПОРТ САМО НА СТАРИТЕ, РАБОТЕЩИ ПАРСЪРИ
 from parsers import parse_jobs_zip, parse_spreadsheet
 
+# ДЕФИНИРАНЕ НА CSS ЗА КАНБАН ДЪСКАТА И БУТОНИТЕ
+KANBAN_CSS = """
+<style>
+/* Заглавия на Канбан колоните */
+.kanban-header {
+    text-align: center;
+    font-size: 14px;
+    font-weight: bold;
+    padding: 8px;
+    background-color: #2e303e;
+    border-radius: 8px 8px 0 0;
+    margin-bottom: 0px;
+    border-bottom: 2px solid #5a5e71;
+}
+
+/* Стилизиране на бутоните като квадратни картички */
+.stButton > button {
+    height: 100px;
+    width: 100% !important;
+    border-radius: 8px;
+    background-color: #1a1c24;
+    border: 1px solid #3d4151;
+    color: white;
+    padding: 10px;
+    transition: all 0.3s ease;
+    margin-bottom: 8px;
+}
+
+.stButton > button:hover {
+    border-color: #ffb400 !important;
+    background-color: #2e303e;
+}
+
+/* Стилизиране на името на кандидата */
+.kanban-cand-name {
+    font-weight: bold;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+    width: 100%;
+}
+
+/* Стилизиране на иконката */
+.kanban-cand-icon {
+    font-size: 18px;
+    margin-right: 5px;
+}
+
+/* Стилизиране на ЗЛАТНАТА РАМКА за Резерва */
+div[data-is-reserve="true"] button {
+    border: 2px solid #ffb400 !important;
+}
+
+/* Заглавие на секцията за Архивирани */
+.inactive-header {
+    margin-top: 15px;
+    margin-bottom: 5px;
+    font-weight: bold;
+}
+
+/* === НОВО: УГОЛЕМЯВАНЕ НА PILLS (ФИЛТРИТЕ) === */
+div[data-testid="stPills"] label {
+    padding: 10px 20px !important;
+    font-size: 16px !important;
+    min-height: 45px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+div[data-testid="stPills"] {
+    gap: 12px; /* Повече разстояние между бутоните, за да "дишат" */
+}
+</style>
+"""
+
 def run_recruitment():
+    st.markdown(KANBAN_CSS, unsafe_allow_html=True)
     st.title("🎯 Подбор на персонал (Recruitment)")
     
     # --- ИНИЦИАЛИЗАЦИЯ НА СЕСИЯТА ---
@@ -60,7 +138,7 @@ def run_recruitment():
     positions = query.execute().data
 
     if not positions:
-        st.info(f"Няма активни обяви.")
+        st.info(f"Няма активни обяви по зададените критерии.")
         st.stop()
 
     if search_term:
@@ -88,13 +166,13 @@ def run_recruitment():
 
     selected_pos_data = next((p for p in positions if p['id'] == selected_pos_id), None)
 
-    if st.button("⚙️ Редакция на параметри", use_container_width=True):
+    if st.button("⚙️ Редакция и Управление на обявата", use_container_width=True):
         edit_position_modal(selected_pos_data)
             
     st.divider()
 
     # --- 4. ЪПЛОУД НА КАНДИДАТИ ---
-    if check_permission("recruitment", "manage_positions"):
+    if check_permission("recruitment", "upload_candidates"):
         with st.expander("📥 Добави нови кандидати (Upload)", expanded=False):
             uploaded_files = st.file_uploader("Качете ZIP (Jobs.bg), CSV или XLSX файлове", accept_multiple_files=True, type=['zip', 'csv', 'xlsx'])
             
@@ -131,7 +209,7 @@ def run_recruitment():
                 
     st.divider()
 
-    # --- 5. ГАЛЕРИЯ НА КАНДИДАТИТЕ (Новият Game Changer) ---
+    # --- 5. ГАЛЕРИЯ НА КАНДИДАТИТЕ ---
     st.markdown(f"### 👥 Кандидати (Галерия)")
 
     apps_query = supabase.table("hr_applications").select("*, hr_candidates(*)").eq("position_id", selected_pos_id).eq("is_deleted", False)
@@ -140,14 +218,12 @@ def run_recruitment():
     if not applications:
         st.info("Няма кандидати по тази обява. Използвайте менюто за Upload по-горе.")
     else:
-        # 5.1 Подготовка на броячите
         base_statuses = ["Нов", "Установи контакт", "Възможно интервю", "Избран за интервю", "Потвърдено интервю", "Направено предложение", "Отхвърлен", "Отказал", "Преместен"]
         status_counts = {"Всички": len(applications)}
         
         for s in base_statuses:
             status_counts[s] = sum(1 for app in applications if app.get('status') == s)
             
-        # 5.2 Генериране на етикетите с броячи (напр. "Нов (3)")
         pill_options = [f"Всички ({status_counts['Всички']})"] + [f"{s} ({status_counts[s]})" for s in base_statuses]
         
         if "gallery_filter" not in st.session_state:
@@ -160,10 +236,8 @@ def run_recruitment():
             
         st.session_state.gallery_filter = selected_pill
         
-        # Извличане на чистото име на статуса (без бройката в скобите)
         active_status_name = selected_pill.rsplit(" (", 1)[0]
         
-        # 5.3 Филтриране на картите
         if active_status_name == "Всички":
             filtered_apps = applications
         else:
@@ -171,7 +245,6 @@ def run_recruitment():
             
         st.write("<br>", unsafe_allow_html=True)
         
-        # 5.4 Визуализация на картите в мрежа (3 колони)
         if not filtered_apps:
             st.info(f"Няма кандидати със статус '{active_status_name}'.")
         else:
@@ -186,7 +259,6 @@ def run_recruitment():
                     is_reserve = int_details.get('reserve_checkbox', False)
                     total_score = sum(manual_scores.values()) if manual_scores else 0
                     
-                    # Самата карта
                     with st.container(border=True):
                         card_col1, card_col2 = st.columns([1, 3])
                         with card_col1:
@@ -198,7 +270,6 @@ def run_recruitment():
                             reserve_icon = " <span style='color: #ffb400; font-weight: bold;'>❓</span>" if is_reserve else ""
                             st.markdown(f"**{full_name}**{reserve_icon}", unsafe_allow_html=True)
                             st.caption(f"Оценка: {total_score}/48")
-                            # Показваме статуса в картата, само ако сме на таб "Всички" (иначе е излишно повторение)
                             if active_status_name == "Всички":
                                 st.caption(f"Статус: {app.get('status')}")
                             
