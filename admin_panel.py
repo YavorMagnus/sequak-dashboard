@@ -72,31 +72,38 @@ def render_admin_panel():
             with tab_perms:
                 with st.form(f"form_user_{user['id']}"):
                     role_idx = SYSTEM_ROLES.index(current_role) if current_role in SYSTEM_ROLES else len(SYSTEM_ROLES)-1
-                    new_role = st.selectbox("Глобална системна роля:", SYSTEM_ROLES, index=role_idx)
-                    st.caption("⚠️ **Супер-админ** и **Администратор** имат пълен достъп (игнорират детайлите долу).")
                     
-                    st.markdown(f"<h4 style='color: #aaaaaa; margin-top: 15px;'>Детайлни права (Прилагат се за Power User и Четец)</h4>", unsafe_allow_html=True)
+                    # ЗАЩИТА ОТ САМОУБИЙСТВО: Ако е твоят профил, падащото меню е замразено (disabled)
+                    new_role = st.selectbox("Глобална системна роля:", SYSTEM_ROLES, index=role_idx, disabled=is_current_user)
                     
                     current_perms = user.get('permissions') or {}
                     new_perms = {}
                     
-                    for mod_key, mod_info in AVAILABLE_PERMISSIONS.items():
-                        st.markdown(f"**{mod_info['name']}**")
-                        mod_new_actions = {}
+                    # СКРИВАНЕ НА ИЗЛИШНИТЕ ЧЕКБОКСОВЕ ЗА ВИСШИ РОЛИ
+                    if new_role in ["Супер-админ", "Администратор"]:
+                        st.info(f"ℹ️ Потребителят с роля **{new_role}** има глобални права. Детайлна настройка на модулите по-долу не е необходима.")
+                        # Запазваме старите права непокътнати, в случай че някога бъде деградиран
+                        new_perms = current_perms
+                    else:
+                        st.markdown(f"<h4 style='color: #aaaaaa; margin-top: 15px;'>Детайлни права (Прилагат се за Power User, Четец и AI)</h4>", unsafe_allow_html=True)
                         
-                        cols = st.columns(3)
-                        col_idx = 0
-                        for action_key, action_desc in mod_info['actions'].items():
-                            is_checked = current_perms.get(mod_key, {}).get(action_key, False)
+                        for mod_key, mod_info in AVAILABLE_PERMISSIONS.items():
+                            st.markdown(f"**{mod_info['name']}**")
+                            mod_new_actions = {}
                             
-                            with cols[col_idx % 3]:
-                                val = st.checkbox(action_desc, value=is_checked, key=f"chk_{user['id']}_{mod_key}_{action_key}")
-                                mod_new_actions[action_key] = val
-                            col_idx += 1
-                        
-                        new_perms[mod_key] = mod_new_actions
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        
+                            cols = st.columns(3)
+                            col_idx = 0
+                            for action_key, action_desc in mod_info['actions'].items():
+                                is_checked = current_perms.get(mod_key, {}).get(action_key, False)
+                                
+                                with cols[col_idx % 3]:
+                                    val = st.checkbox(action_desc, value=is_checked, key=f"chk_{user['id']}_{mod_key}_{action_key}")
+                                    mod_new_actions[action_key] = val
+                                col_idx += 1
+                            
+                            new_perms[mod_key] = mod_new_actions
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            
                     submit_btn = st.form_submit_button("💾 Запази правата и ролята", type="primary")
                     
                     if submit_btn:
@@ -105,7 +112,14 @@ def render_admin_panel():
                                 "role": new_role,
                                 "permissions": new_perms
                             }).eq("id", user['id']).execute()
+                            
                             st.success(f"✅ Правата на {user['username']} са обновени успешно!")
+                            
+                            # Опресняваме сесията, ако потребителят редактира себе си (напр. свои чекбоксове, ако е Power User)
+                            if is_current_user:
+                                st.session_state.user_role = new_role
+                                st.session_state.user_permissions = new_perms
+                                
                             st.rerun()
                         except Exception as e:
                             st.error(f"Грешка при запис: {e}")
