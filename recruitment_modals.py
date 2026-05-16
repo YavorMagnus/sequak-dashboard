@@ -386,6 +386,11 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
             st.selectbox("Причина за отхвърляне", reject_reasons, index=reject_reasons.index(curr_r) if curr_r in reject_reasons else 0, key=f"reject_reason_sel_{app_data['id']}")
             st.checkbox("Запази в резерва?", value=is_res, key=f"is_reserve_check_{app_data['id']}")
 
+        # Логика за "Направено предложение"
+        if new_status_selection == "Направено предложение":
+            is_offer_closed = interview_info.get('offer_closed', False)
+            st.checkbox("Офертата е приета / Процесът е финализиран", value=is_offer_closed, key=f"offer_closed_{app_data['id']}")
+
         # Логика за "Преместен / Копиран"
         if new_status_selection == "Преместен":
             pos_resp = supabase.table("hr_positions").select("id, title, company_name").eq("status", "Активна").eq("is_deleted", False).execute()
@@ -466,6 +471,13 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                     # Зачистваме ги, ако се върне в друг статус
                     update_payload['rejection_reason'] = None
                     update_payload['is_backup'] = False
+
+                # Записваме флага за финализирана оферта в JSON-а
+                if new_status_selection == "Направено предложение":
+                    if f"offer_closed_{app_data['id']}" in st.session_state:
+                        update_payload['interview_details']['offer_closed'] = st.session_state[f"offer_closed_{app_data['id']}"]
+                else:
+                    update_payload['interview_details']['offer_closed'] = False
                 
                 supabase.table("hr_applications").update(update_payload).eq("id", app_data['id']).execute()
                 st.rerun()
