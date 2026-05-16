@@ -95,19 +95,20 @@ def render_action_center():
             st.markdown(f"**🎯 {data['title']} ({data['company']})**")
             
             # Helper функция за чертане на бутони (Deep Links)
-            def draw_task_btn(label, count, icon):
+            def draw_task_btn(label, count, icon, target_status):
                 if count > 0:
                     if st.button(f"{icon} {count} {label}", key=f"act_{pos_id}_{icon}", use_container_width=True):
                         st.session_state.active_campaign_id = pos_id
                         st.session_state.active_company = data['company']
+                        st.session_state.target_gallery_status = target_status # ТУК Е КУКИЧКАТА!
                         st.rerun()
 
-            draw_task_btn("Нови кандидати", tasks['new'], "🔴")
-            draw_task_btn("За телефонен контакт", tasks['contact'], "📞")
-            draw_task_btn("За преглед от мениджър", tasks['possible_int'], "💡")
-            draw_task_btn("За насрочване на интервю", tasks['schedule_int'], "📅")
-            draw_task_btn("Предстоящи интервюта", tasks['conduct_int'], "🏢")
-            draw_task_btn("Отворени предложения", tasks['offer'], "📝")
+            draw_task_btn("Нови кандидати", tasks['new'], "🔴", "Нов")
+            draw_task_btn("За телефонен контакт", tasks['contact'], "📞", "Установи контакт")
+            draw_task_btn("За преглед от мениджър", tasks['possible_int'], "💡", "Възможно интервю")
+            draw_task_btn("За насрочване на интервю", tasks['schedule_int'], "📅", "Избран за интервю")
+            draw_task_btn("Предстоящи интервюта", tasks['conduct_int'], "🏢", "Потвърдено интервю")
+            draw_task_btn("Отворени предложения", tasks['offer'], "📝", "Направено предложение")
             
             st.divider()
 
