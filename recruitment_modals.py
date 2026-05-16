@@ -379,7 +379,8 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                 keep_current = st.checkbox("Запази копие и в текущата обява?", value=False)
                 
                 if not keep_current:
-                    st.warning("🚨 ВНИМАНИЕ: Кандидатът ще бъде премахнат от ТЕКУЩАТА обява. Сигурни ли сте?")
+                    # ПОПРАВЕНО СЪОБЩЕНИЕ ПО ИЗИСКВАНЕ НА ПОТРЕБИТЕЛЯ
+                    st.warning("🚨 ВНИМАНИЕ: Кандидатът ще бъде прехвърлен в група 'Преместени'. Сигурни ли сте?")
                     confirm_btn_label = "⚠️ Потвърди окончателно преместване"
                 else:
                     confirm_btn_label = "🔄 Премести (с копие)"
@@ -430,7 +431,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                         
                     st.rerun()
 
-        # Бутон за запазване на стандартни статуси
+        # Бутон за запазване на standard статуси
         if new_status_selection != "Преместен":
             if st.button("🔄 Запази новия статус", type="primary", use_container_width=True):
                 update_payload = {
@@ -438,7 +439,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                     "interview_details": interview_info
                 }
                 
-                # Ако е отхвърлен, добавяме полетата за отхвърляне
+                # Ако е отхвърлен, добавяме полетата за отхвърляне в правилните колони
                 if new_status_selection == "Отхвърлен":
                     if f"reject_reason_sel_{app_data['id']}" in st.session_state:
                         update_payload['rejection_reason'] = st.session_state[f"reject_reason_sel_{app_data['id']}"]
@@ -520,7 +521,7 @@ def create_position_modal(preselected_company):
         if st.form_submit_button("➕ Създай обява", type="primary"):
             if title and owners:
                 data = {
-                    "company_name": sel_comp, "title": title, "status": "Активна",
+                    "company_name": sel_comp, "title": title, "status": "Active",
                     "owners": owners, "hr_contact": hr, "evaluation_method": eval_method,
                     "salary_min": new_salary_min, "salary_max": new_salary_max,
                     "city": new_city, "base_location": new_base,
