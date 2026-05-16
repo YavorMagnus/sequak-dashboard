@@ -145,7 +145,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
     obj_total = sum(scores.get(cat, 0) for cat in categories)
     subj_total = scores.get("Субективна", 0)
     
-    # --- ХЕДЪР (Изчистен и оптимизиран) ---
+    # --- ХЕДЪР ---
     col_photo, col_name, col_upcoming, col_status = st.columns([1, 1.5, 2, 1])
     
     with col_photo:
@@ -163,7 +163,6 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
         if ph_d:
             st.markdown(f"📞 Телефонно: **{ph_d}** в **{interview_info.get('ph_time', '')}**")
             
-        # ДОБАВЕНИ ДИАПАЗОНИ В ХЕДЪРА
         mgr_d1 = interview_info.get('mgr_date1')
         if mgr_d1:
             mgr_r1 = interview_info.get('mgr_range1', '')
@@ -266,7 +265,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                 }
                 res = supabase.table("hr_comments").insert(new_note_entry).execute()
                 if res.data:
-                    all_comments.insert(0, res.data[0]) # Добавяме я в паметта за мигновена визуализация
+                    all_comments.insert(0, res.data[0]) 
                 st.toast("✅ Бележката е добавена успешно!")
                 
         st.divider()
@@ -280,7 +279,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
     with tab_list[4]:
         time_slots = generate_time_options()
         
-        # 1. ТЕЛЕФОННО ИНТЕРВЮ (ВЕЧЕ НЕ СМЕНЯ СТАТУСА)
+        # 1. ТЕЛЕФОННО ИНТЕРВЮ
         with st.expander("📞 1. Телефонно интервю (HR Скрининг)", expanded=False):
             col_date1, col_time1 = st.columns(2)
             with col_date1:
@@ -313,7 +312,6 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                     'mgr_date1': m_date1.strftime("%Y-%m-%d"), 'mgr_range1': m_range1,
                     'mgr_date2': m_date2.strftime("%Y-%m-%d"), 'mgr_range2': m_range2
                 })
-                # Тук статусът се сменя, затова правим rerun!
                 # [HOOK-NOTIFICATION]: Избран за интервю
                 supabase.table("hr_applications").update({
                     "interview_details": interview_info, 
@@ -342,7 +340,6 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                     'interview_date': final_date.strftime("%Y-%m-%d"), 
                     'interview_time': final_time
                 })
-                # Тук статусът се сменя, затова правим rerun!
                 # [HOOK-NOTIFICATION]: Потвърдено интервю
                 supabase.table("hr_applications").update({
                     "interview_details": interview_info, 
@@ -361,11 +358,15 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
         if new_status_selection == "Отхвърлен":
             reject_data = supabase.table("hr_settings").select("setting_value").eq("setting_key", "reject_reasons").execute()
             reject_reasons = reject_data.data[0].get("setting_value", ["Друго"]) if reject_data.data else ["Друго"]
-            curr_r = interview_info.get('rejection_reason')
+            
+            # Четем от правилните колони на hr_applications
+            curr_r = app_data.get('rejection_reason')
+            is_res = app_data.get('is_backup', False)
+            
             st.selectbox("Причина за отхвърляне", reject_reasons, index=reject_reasons.index(curr_r) if curr_r in reject_reasons else 0, key=f"reject_reason_sel_{app_data['id']}")
-            st.checkbox("Запази в резерва?", value=interview_info.get('reserve', False), key=f"is_reserve_check_{app_data['id']}")
+            st.checkbox("Запази в резерва?", value=is_res, key=f"is_reserve_check_{app_data['id']}")
 
-        # Логика за "Преместен"
+        # Логика за "Преместен / Копиран"
         if new_status_selection == "Преместен":
             pos_resp = supabase.table("hr_positions").select("id, title, company_name").eq("status", "Активна").eq("is_deleted", False).execute()
             target_positions = {p['id']: f"{p['title']} ({p['company_name']})" for p in pos_resp.data if p['id'] != pos_data['id']}
@@ -381,30 +382,70 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                     confirm_btn_label = "🔄 Премести (с копие)"
                     
                 if st.button(confirm_btn_label, type="primary"):
+                    target_pos_name = target_positions[target_id]
+                    old_pos_name = f"{pos_data.get('title', '')} ({pos_data.get('company_name', '')})" if pos_data else "Неизвестна обява"
+                    
                     if keep_current:
-                        supabase.table("hr_applications").insert({
-                            "candidate_id": candidate['id'], 
-                            "position_id": target_id, 
-                            "status": "Нов"
-                        }).execute()
+                        action_verb_old = "копиран в"
+                        action_verb_new = "копиран от"
                     else:
+                        action_verb_old = "преместен в"
+                        action_verb_new = "преместен от"
+
+                    # 1. Създаваме новия запис
+                    new_app_res = supabase.table("hr_applications").insert({
+                        "candidate_id": candidate['id'], 
+                        "position_id": target_id, 
+                        "status": "Нов"
+                    }).execute()
+                    
+                    if new_app_res.data:
+                        new_app_id = new_app_res.data[0]['id']
+                        
+                        # 2. Системна бележка в новия картон
+                        supabase.table("hr_comments").insert({
+                            "application_id": new_app_id,
+                            "author_name": "Система",
+                            "comment_text": f"Автоматично съобщение: Кандидатът е {action_verb_new} обява {old_pos_name}.",
+                            "comment_type": "Системна"
+                        }).execute()
+                        
+                        # 3. Системна бележка в стария картон
+                        supabase.table("hr_comments").insert({
+                            "application_id": app_data['id'],
+                            "author_name": "Система",
+                            "comment_text": f"Автоматично съобщение: Кандидатът беше {action_verb_old} обява {target_pos_name}.",
+                            "comment_type": "Системна"
+                        }).execute()
+                        
+                    # 4. Обновяване на стария статус (ако не е копие)
+                    if not keep_current:
                         supabase.table("hr_applications").update({
-                            "position_id": target_id, 
-                            "status": "Нов"
+                            "status": "Преместен"
                         }).eq("id", app_data['id']).execute()
+                        
                     st.rerun()
 
-        # Бутон за запазване на стандартни статуси
+        # Бутон за запазване на стандартни статуси (Изчистен и оптимизиран)
         if new_status_selection != "Преместен":
             if st.button("🔄 Запази новия статус", type="primary", use_container_width=True):
-                # [HOOK-NOTIFICATION]: Смяна на статус
+                update_payload = {
+                    "status": new_status_selection,
+                    "interview_details": interview_info
+                }
+                
+                # Ако е отхвърлен, добавяме полетата за отхвърляне
                 if new_status_selection == "Отхвърлен":
                     if f"reject_reason_sel_{app_data['id']}" in st.session_state:
-                        interview_info['rejection_reason'] = st.session_state[f"reject_reason_sel_{app_data['id']}"]
+                        update_payload['rejection_reason'] = st.session_state[f"reject_reason_sel_{app_data['id']}"]
                     if f"is_reserve_check_{app_data['id']}" in st.session_state:
-                        interview_info['reserve'] = st.session_state[f"is_reserve_check_{app_data['id']}"]
+                        update_payload['is_backup'] = st.session_state[f"is_reserve_check_{app_data['id']}"]
+                else:
+                    # Зачистваме ги, ако се върне в друг статус
+                    update_payload['rejection_reason'] = None
+                    update_payload['is_backup'] = False
                 
-                supabase.table("hr_applications").update({"status": new_status_selection, "interview_details": interview_info}).eq("id", app_data['id']).execute()
+                supabase.table("hr_applications").update(update_payload).eq("id", app_data['id']).execute()
                 st.rerun()
 
     # --- ОПАСНА ЗОНА (ИЗТРИВАНЕ НА КАНДИДАТ) ---
