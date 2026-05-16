@@ -123,12 +123,18 @@ if not available_pages:
     st.sidebar.warning("Нямате права за достъп до нито един модул.")
     page = None
 else:
-    # --- МАГИЯТА ЗА ДИРЕКТНИТЕ ЛИНКОВЕ (PORTIER OVERRIDE) ---
+    # --- МАГИЯТА ЗА ДИРЕКТНИТЕ ЛИНКОВЕ И НАЧАЛЕН ЕКРАН ПО ПОДРАЗБИРАНЕ ---
     default_index = 0
+    
+    # НОВО: Правим Рекрутмънт начален екран, ако потребителят има права за него
+    if "🎯 Рекрутмънт и Подбор" in available_pages:
+        default_index = available_pages.index("🎯 Рекрутмънт и Подбор")
+        
     if "app_id" in st.query_params and "🎯 Рекрутмънт и Подбор" in available_pages:
         default_index = available_pages.index("🎯 Рекрутмънт и Подбор")
         
-    page = st.sidebar.radio("Изберете модул:", available_pages, index=default_index)
+    # НОВО: Добавяме key="main_nav_menu", за да може Action Center да го управлява
+    page = st.sidebar.radio("Изберете модул:", available_pages, index=default_index, key="main_nav_menu")
 
 # === НОВО: ACTION CENTER ===
 with st.sidebar:
