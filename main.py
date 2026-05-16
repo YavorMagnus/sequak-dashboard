@@ -10,6 +10,7 @@ from ro import check_and_show_alerts, render_ro_registry, render_ro_analytics
 from admin_panel import render_admin_panel
 # ПОПРАВКАТА Е ТУК:
 from recruitment_main import run_recruitment
+from recruitment_ac import render_action_center
 
 st.markdown("""
     <style>
@@ -128,6 +129,12 @@ else:
         default_index = available_pages.index("🎯 Рекрутмънт и Подбор")
         
     page = st.sidebar.radio("Изберете модул:", available_pages, index=default_index)
+
+# === НОВО: ACTION CENTER ===
+with st.sidebar:
+    st.markdown("---")
+    render_action_center()
+# ===========================
 
 st.sidebar.markdown("---")
 st.sidebar.write(f"👤 **Профил:** {st.session_state.username}")
