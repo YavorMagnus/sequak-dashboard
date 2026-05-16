@@ -521,7 +521,7 @@ def create_position_modal(preselected_company):
         if st.form_submit_button("➕ Създай обява", type="primary"):
             if title and owners:
                 data = {
-                    "company_name": sel_comp, "title": title, "status": "Active",
+                    "company_name": sel_comp, "title": title, "status": "Активна",
                     "owners": owners, "hr_contact": hr, "evaluation_method": eval_method,
                     "salary_min": new_salary_min, "salary_max": new_salary_max,
                     "city": new_city, "base_location": new_base,
