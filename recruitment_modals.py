@@ -266,7 +266,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                 }
                 res = supabase.table("hr_comments").insert(new_note_entry).execute()
                 if res.data:
-                    all_comments.insert(0, res.data[0])
+                    all_comments.insert(0, res.data[0]) # Добавяме я в паметта за мигновена визуализация
                 st.toast("✅ Бележката е добавена успешно!")
                 
         st.divider()
@@ -280,7 +280,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
     with tab_list[4]:
         time_slots = generate_time_options()
         
-        # 1. ТЕЛЕФОННО ИНТЕРВЮ
+        # 1. ТЕЛЕФОННО ИНТЕРВЮ (ВЕЧЕ НЕ СМЕНЯ СТАТУСА)
         with st.expander("📞 1. Телефонно интервю (HR Скрининг)", expanded=False):
             col_date1, col_time1 = st.columns(2)
             with col_date1:
@@ -313,6 +313,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                     'mgr_date1': m_date1.strftime("%Y-%m-%d"), 'mgr_range1': m_range1,
                     'mgr_date2': m_date2.strftime("%Y-%m-%d"), 'mgr_range2': m_range2
                 })
+                # Тук статусът се сменя, затова правим rerun!
                 # [HOOK-NOTIFICATION]: Избран за интервю
                 supabase.table("hr_applications").update({
                     "interview_details": interview_info, 
@@ -341,6 +342,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                     'interview_date': final_date.strftime("%Y-%m-%d"), 
                     'interview_time': final_time
                 })
+                # Тук статусът се сменя, затова правим rerun!
                 # [HOOK-NOTIFICATION]: Потвърдено интервю
                 supabase.table("hr_applications").update({
                     "interview_details": interview_info, 
@@ -395,6 +397,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
         # Бутон за запазване на стандартни статуси
         if new_status_selection != "Преместен":
             if st.button("🔄 Запази новия статус", type="primary", use_container_width=True):
+                # [HOOK-NOTIFICATION]: Смяна на статус
                 if new_status_selection == "Отхвърлен":
                     if f"reject_reason_sel_{app_data['id']}" in st.session_state:
                         interview_info['rejection_reason'] = st.session_state[f"reject_reason_sel_{app_data['id']}"]
@@ -425,34 +428,63 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
 @st.dialog("Създаване на нова обява", width="large")
 def create_position_modal(preselected_company):
     if not check_permission("recruitment", "manage_positions"):
-        st.error("Нямате права.")
+        st.error("Нямате права за създаване на обяви.")
         return
-    
-    users_resp = supabase.table("users").select("username").execute()
-    usernames = [u['username'] for u in users_resp.data] if users_resp.data else []
-    
-    with st.form(key="form_create_new_pos"):
-        comp_list = ["REN", "CIM", "MAS", "BAU", "AST", "RXS", "RXB", "SNW", "DXM", "ICM"]
-        sel_comp = st.selectbox("Фирма", comp_list, index=comp_list.index(preselected_company) if preselected_company in comp_list else 0)
-        pos_title = st.text_input("Заглавие на позицията")
-        
-        st.markdown("Мениджъри и HR")
-        owners_list = st.multiselect("Собственици на обявата", usernames)
-        hr_contact_name = st.selectbox("HR Контакт", usernames)
-        
+
+    users_data = supabase.table("users").select("username").execute().data
+    all_users = [u['username'] for u in users_data] if users_data else []
+
+    with st.form(key="form_create_pos"):
+        companies = ["REN", "CIM", "MAS", "BAU", "AST", "RXS", "RXB", "SNW", "DXM", "ICM"]
+        c_idx = companies.index(preselected_company) if preselected_company in companies else 0
+
+        c1, c2 = st.columns([1, 3])
+        with c1: sel_comp = st.selectbox("Фирма *", companies, index=c_idx)
+        with c2: title = st.text_input("Име на позицията *")
+
+        st.markdown("👥 **Мениджъри и HR**")
+        r1, r2 = st.columns(2)
+        with r1: owners = st.multiselect("Собственици (Мениджъри)", options=all_users)
+        with r2: hr = st.selectbox("HR Контакт", options=[""] + all_users)
+
+        eval_method = st.selectbox("Метод за оценка", [
+            "Числова оценка 1-6 - обективна и субективна",
+            "AI оценка + човешка субективна оценка"
+        ])
+
+        col_sal1, col_sal2 = st.columns(2)
+        with col_sal1:
+            new_salary_min = st.text_input("Мин. възнаграждение (EUR)")
+        with col_sal2:
+            new_salary_max = st.text_input("Макс. възнаграждение (EUR)")
+
+        col_loc1, col_loc2 = st.columns(2)
+        with col_loc1:
+            new_city = st.text_input("Град", value="София")
+        with col_loc2:
+            new_base = st.text_input("База (незадължително)")
+
+        work_type = st.selectbox("Тип работа", ["Присъствено", "Хибридно", "Дистанционно"])
+        priority = st.selectbox("Приоритет", ["Нормален", "Висок", "Спешен"])
+
+        st.divider()
         if st.form_submit_button("➕ Създай обява", type="primary"):
-            if pos_title and owners_list:
-                new_pos_data = {
-                    "company_name": sel_comp, 
-                    "title": pos_title, 
-                    "owners": owners_list, 
-                    "hr_contact": hr_contact_name, 
-                    "status": "Активна",
+            if title and owners:
+                data = {
+                    "company_name": sel_comp, "title": title, "status": "Активна",
+                    "owners": owners, "hr_contact": hr, "evaluation_method": eval_method,
+                    "salary_min": new_salary_min, "salary_max": new_salary_max,
+                    "city": new_city, "base_location": new_base,
+                    "work_type": work_type, "priority": priority,
                     "is_deleted": False
                 }
-                insert_res = supabase.table("hr_positions").insert(new_pos_data).execute()
-                if insert_res.data:
-                    st.session_state.active_campaign_id = insert_res.data[0]['id']
+                res = supabase.table("hr_positions").insert(data).execute()
+                if res.data:
+                    st.success("Обявата е създадена!")
+                    st.session_state.active_campaign_id = res.data[0]['id']
+                    st.session_state.active_company = sel_comp
                     st.rerun()
+                else:
+                    st.error("Грешка при запис в базата данни.")
             else:
-                st.error("Попълнете заглавие и собственици!")
+                st.error("Попълнете задължителните полета!")
