@@ -57,11 +57,6 @@ KANBAN_CSS = """
     margin-right: 5px;
 }
 
-/* Стилизиране на ЗЛАТНАТА РАМКА за Резерва */
-div[data-is-reserve="true"] button {
-    border: 2px solid #ffb400 !important;
-}
-
 /* Заглавие на секцията за Архивирани */
 .inactive-header {
     margin-top: 15px;
@@ -334,17 +329,15 @@ def run_recruitment():
                         cand = app.get("hr_candidates", {})
                         full_name = cand.get('full_name', 'Неизвестен')
                         
-                        # НОВАТА ЛОГИКА: Четем is_backup директно от app
+                        # Четем is_backup директно от колоната
                         is_reserve = app.get('is_backup', False)
                         
                         manual_scores = app.get('manual_score') or {}
                         categories = ["Търговска", "Сервизна", "Строителна/архитектурна", "Юридическа", "IT", "Складова", "Счетоводно-административна", "Управленска"]
                         total_obj = sum(manual_scores.get(comp, 0) for comp in categories)
                         
-                        # Слагаме златна рамка, ако е резерва
-                        container_attr = {"data-is-reserve": "true"} if is_reserve else {}
-                        
-                        with st.container(border=True, **container_attr):
+                        # Премахнат непозволеният аргумент **container_attr
+                        with st.container(border=True):
                             card_col1, card_col2 = st.columns([1, 3])
                             with card_col1:
                                 if cand.get('photo_thumbnail'):
