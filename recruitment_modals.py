@@ -37,18 +37,23 @@ def edit_position_modal(pos_data):
             if check_permission("recruitment", "hard_delete"):
                 if st.button("☢️ Окончателно изтриване", use_container_width=True):
                     try:
+                        # 1. Намираме всички кандидатури (applications) за тази обява
                         apps_res = supabase.table("hr_applications").select("id, candidate_id").eq("position_id", pos_data['id']).execute()
                         application_ids = [app['id'] for app in apps_res.data] if apps_res.data else []
                         candidate_ids = [app['candidate_id'] for app in apps_res.data] if apps_res.data else []
 
+                        # 2. Изтриваме коментарите от hr_comments, свързани с тези кандидатури
                         if application_ids:
                             supabase.table("hr_comments").delete().in_("application_id", application_ids).execute()
 
+                        # 3. Изтриваме самите записи в hr_applications
                         supabase.table("hr_applications").delete().eq("position_id", pos_data['id']).execute()
 
+                        # 4. Изтриваме физическите лица в hr_candidates
                         for cand_id in candidate_ids:
                             supabase.table("hr_candidates").delete().eq("id", cand_id).execute()
 
+                        # 5. Изтриваме самата обява
                         supabase.table("hr_positions").delete().eq("id", pos_data['id']).execute()
 
                         st.session_state.active_campaign_id = None
@@ -157,9 +162,19 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
         ph_d = interview_info.get('ph_date')
         if ph_d:
             st.markdown(f"📞 Телефонно: **{ph_d}** в **{interview_info.get('ph_time', '')}**")
+            
+        # ДОБАВЕНИ ДИАПАЗОНИ В ХЕДЪРА
         mgr_d1 = interview_info.get('mgr_date1')
         if mgr_d1:
-            st.markdown(f"💡 Предложени дати: **{mgr_d1}** / **{interview_info.get('mgr_date2', '')}**")
+            mgr_r1 = interview_info.get('mgr_range1', '')
+            mgr_d2 = interview_info.get('mgr_date2', '')
+            mgr_r2 = interview_info.get('mgr_range2', '')
+            
+            opt1_text = f"{mgr_d1} ({mgr_r1})" if mgr_r1 else f"{mgr_d1}"
+            opt2_text = f"{mgr_d2} ({mgr_r2})" if mgr_r2 else f"{mgr_d2}"
+            
+            st.markdown(f"💡 Предложени: **{opt1_text}** / **{opt2_text}**")
+            
         off_d = interview_info.get('interview_date')
         if off_d:
             st.markdown(f"🏢 **Потвърдено:** {off_d} в {interview_info.get('interview_time', '')}")
@@ -251,7 +266,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                 }
                 res = supabase.table("hr_comments").insert(new_note_entry).execute()
                 if res.data:
-                    all_comments.insert(0, res.data[0]) # Добавяме я в паметта за мигновена визуализация
+                    all_comments.insert(0, res.data[0])
                 st.toast("✅ Бележката е добавена успешно!")
                 
         st.divider()
@@ -265,7 +280,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
     with tab_list[4]:
         time_slots = generate_time_options()
         
-        # 1. ТЕЛЕФОННО ИНТЕРВЮ (ВЕЧЕ НЕ СМЕНЯ СТАТУСА)
+        # 1. ТЕЛЕФОННО ИНТЕРВЮ
         with st.expander("📞 1. Телефонно интервю (HR Скрининг)", expanded=False):
             col_date1, col_time1 = st.columns(2)
             with col_date1:
@@ -298,7 +313,6 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                     'mgr_date1': m_date1.strftime("%Y-%m-%d"), 'mgr_range1': m_range1,
                     'mgr_date2': m_date2.strftime("%Y-%m-%d"), 'mgr_range2': m_range2
                 })
-                # Тук статусът се сменя, затова правим rerun!
                 # [HOOK-NOTIFICATION]: Избран за интервю
                 supabase.table("hr_applications").update({
                     "interview_details": interview_info, 
@@ -327,7 +341,6 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                     'interview_date': final_date.strftime("%Y-%m-%d"), 
                     'interview_time': final_time
                 })
-                # Тук статусът се сменя, затова правим rerun!
                 # [HOOK-NOTIFICATION]: Потвърдено интервю
                 supabase.table("hr_applications").update({
                     "interview_details": interview_info, 
@@ -382,7 +395,6 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
         # Бутон за запазване на стандартни статуси
         if new_status_selection != "Преместен":
             if st.button("🔄 Запази новия статус", type="primary", use_container_width=True):
-                # [HOOK-NOTIFICATION]: Смяна на статус
                 if new_status_selection == "Отхвърлен":
                     if f"reject_reason_sel_{app_data['id']}" in st.session_state:
                         interview_info['rejection_reason'] = st.session_state[f"reject_reason_sel_{app_data['id']}"]
