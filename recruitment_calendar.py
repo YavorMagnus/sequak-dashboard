@@ -23,9 +23,16 @@ def render_interview_calendar():
     # 2. Филтриране само на тези, които имат насрочена дата за интервю
     scheduled_apps = []
     interviewers = set()
+    stakeholders = set()
     
     for app in apps:
         int_details = app.get('interview_details') or {}
+        pos = app.get('hr_positions') or {}
+        owners = pos.get('owners') or []
+        
+        # Събираме всички уникални собственици на обяви за филтъра
+        for owner in owners:
+            stakeholders.add(owner)
         
         # Проверяваме за официално интервю
         i_date = int_details.get('interview_date')
@@ -41,7 +48,8 @@ def render_interview_calendar():
                     'date_obj': d_obj,
                     'time_str': i_time or "00:00",
                     'interviewer': i_name or "Непосочен",
-                    'type': "🏢 Официално"
+                    'type': "🏢 Официално",
+                    'owners': owners
                 })
             except:
                 pass
@@ -49,15 +57,19 @@ def render_interview_calendar():
         # Проверяваме и за телефонно интервю
         ph_date = int_details.get('ph_date')
         ph_time = int_details.get('ph_time')
+        ph_interviewer = int_details.get('ph_interviewer', 'HR Скрининг') # Четем новия ключ от Стъпка 1
+        
         if ph_date:
             try:
                 d_obj_ph = datetime.strptime(ph_date, "%Y-%m-%d").date()
+                interviewers.add(ph_interviewer)
                 scheduled_apps.append({
                     'app': app,
                     'date_obj': d_obj_ph,
                     'time_str': ph_time or "00:00",
-                    'interviewer': "HR Скрининг",
-                    'type': "📞 Телефонно"
+                    'interviewer': ph_interviewer,
+                    'type': "📞 Телефонно",
+                    'owners': owners
                 })
             except:
                 pass
@@ -67,16 +79,28 @@ def render_interview_calendar():
         return
 
     # 3. ФИЛТРИ (Горе в модала)
-    col_f1, col_f2 = st.columns([2, 1])
+    st.markdown("**Филтриране на графика:**")
+    col_f1, col_f2, col_f3 = st.columns(3)
     
     with col_f1:
-        all_interviewers = ["Всички", "HR Скрининг"] + sorted(list(interviewers))
+        all_stakeholders = ["Всички"] + sorted(list(stakeholders))
         curr_user = st.session_state.get('username')
-        def_idx = all_interviewers.index(curr_user) if curr_user in all_interviewers else 0
-        sel_interviewer = st.pills("👤 Интервюиращ:", all_interviewers, default=all_interviewers[def_idx], selection_mode="single")
-        if not sel_interviewer: sel_interviewer = "Всички"
+        def_stk_idx = all_stakeholders.index(curr_user) if curr_user in all_stakeholders else 0
+        sel_stakeholder = st.selectbox("💼 Стейкхолдър (Обява):", all_stakeholders, index=def_stk_idx)
         
     with col_f2:
+        all_interviewers = ["Всички"] + sorted(list(interviewers))
+        sel_interviewer = st.selectbox("🗣️ Провеждащ интервюто:", all_interviewers, index=0)
+        
+    with col_f3:
+        # Позволяваме празна стойност (None), за да показваме всички дати по подразбиране
+        sel_date = st.date_input("📅 Конкретна дата:", value=None)
+
+    st.write("<br>", unsafe_allow_html=True)
+    
+    # Хапчетата за период се показват/ползват само ако не е избрана конкретна дата
+    sel_period = None
+    if not sel_date:
         sel_period = st.pills("⏳ Период:", ["Предстоящи", "Минали"], default="Предстоящи", selection_mode="single")
         if not sel_period: sel_period = "Предстоящи"
 
@@ -85,23 +109,33 @@ def render_interview_calendar():
     filtered_apps = []
     
     for item in scheduled_apps:
+        # Филтър по Стейкхолдър
+        if sel_stakeholder != "Всички" and sel_stakeholder not in item['owners']:
+            continue
+            
+        # Филтър по Интервюиращ
         if sel_interviewer != "Всички" and item['interviewer'] != sel_interviewer:
             continue
-        
-        is_upcoming = item['date_obj'] >= today
-        if sel_period == "Предстоящи" and not is_upcoming: continue
-        if sel_period == "Минали" and is_upcoming: continue
-        
+            
+        # Филтър по Дата или Период
+        if sel_date:
+            if item['date_obj'] != sel_date:
+                continue
+        else:
+            is_upcoming = item['date_obj'] >= today
+            if sel_period == "Предстоящи" and not is_upcoming: continue
+            if sel_period == "Минали" and is_upcoming: continue
+            
         filtered_apps.append(item)
 
     # 5. СОРТИРАНЕ НА СПИСЪКА
-    if sel_period == "Предстоящи":
+    if sel_date or sel_period == "Предстоящи":
         filtered_apps.sort(key=lambda x: (x['date_obj'], x['time_str']))
     else:
         filtered_apps.sort(key=lambda x: (x['date_obj'], x['time_str']), reverse=True)
 
     if not filtered_apps:
-        st.info(f"Няма {sel_period.lower()} интервюта за този избор.")
+        st.warning("Няма намерени интервюта, отговарящи на избраните филтри.")
         return
 
     # 6. ГРУПИРАНЕ ПО ДНИ И ЧЕРТАЕНЕ НА ВРЕМЕВАТА ЛИНИЯ
@@ -133,13 +167,14 @@ def render_interview_calendar():
             p_comp = pos.get('company_name', '')
             time_str = item['time_str']
             int_type = item['type']
+            int_name = item['interviewer']
             
             with st.container(border=True):
                 r1, r2, r3 = st.columns([1, 4, 1], vertical_alignment="center")
                 with r1:
                     st.markdown(f"<span style='color: #00aaff; font-size: 1.3rem; font-weight: bold;'>{time_str}</span>", unsafe_allow_html=True)
                 with r2:
-                    st.markdown(f"**{c_name}** | {int_type}<br><span style='color: #aaaaaa; font-size: 0.9rem;'>{p_title} ({p_comp})</span>", unsafe_allow_html=True)
+                    st.markdown(f"**{c_name}** | {int_type} с **{int_name}**<br><span style='color: #aaaaaa; font-size: 0.9rem;'>{p_title} ({p_comp})</span>", unsafe_allow_html=True)
                 with r3:
                     # ЩАФЕТАТА: Записваме данните в паметта и рестартираме, за да затворим Календара
                     if st.button("📂 Отвори", key=f"cal_btn_{app['id']}_{int_type}", use_container_width=True):
