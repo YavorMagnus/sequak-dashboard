@@ -347,8 +347,11 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                 }).eq("id", app_data['id']).execute()
                 st.rerun()
 
-    # ТАБ 6: СТАТУС (РЪЧНА СМЯНА И ПРЕМЕСТВАНЕ)
-    with tab_list[5]:
+    # =========================================================================
+    # ТАБ 6: СТАТУС (Опакован във Фрагмент, за да не подскача скролът)
+    # =========================================================================
+    @st.fragment
+    def render_status_tab():
         st.markdown("### ⚙️ Смяна на статус")
         all_statuses = ["Нов", "Установи контакт", "Възможно интервю", "Избран за интервю", "Потвърдено интервю", "Направено предложение", "Отхвърлен", "Отказал", "Преместен"]
         current_status_name = app_data.get('status', 'Нов')
@@ -401,19 +404,20 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                     
                     if new_app_res.data:
                         new_app_id = new_app_res.data[0]['id']
+                        current_user = st.session_state.get('username', 'Система')
                         
-                        # 2. Системна бележка в новия картон
+                        # 2. Системна бележка в новия картон (Вариант Б)
                         supabase.table("hr_comments").insert({
                             "application_id": new_app_id,
-                            "author_name": "Система",
+                            "author_name": current_user,
                             "comment_text": f"Автоматично съобщение: Кандидатът е {action_verb_new} обява {old_pos_name}.",
                             "comment_type": "Системна"
                         }).execute()
                         
-                        # 3. Системна бележка в стария картон
+                        # 3. Системна бележка в стария картон (Вариант Б)
                         supabase.table("hr_comments").insert({
                             "application_id": app_data['id'],
-                            "author_name": "Система",
+                            "author_name": current_user,
                             "comment_text": f"Автоматично съобщение: Кандидатът беше {action_verb_old} обява {target_pos_name}.",
                             "comment_type": "Системна"
                         }).execute()
@@ -426,7 +430,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                         
                     st.rerun()
 
-        # Бутон за запазване на стандартни статуси (Изчистен и оптимизиран)
+        # Бутон за запазване на стандартни статуси
         if new_status_selection != "Преместен":
             if st.button("🔄 Запази новия статус", type="primary", use_container_width=True):
                 update_payload = {
@@ -447,6 +451,10 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                 
                 supabase.table("hr_applications").update(update_payload).eq("id", app_data['id']).execute()
                 st.rerun()
+
+    # ИЗВИКВАНЕ НА ФРАГМЕНТА В ТАБ 6
+    with tab_list[5]:
+        render_status_tab()
 
     # --- ОПАСНА ЗОНА (ИЗТРИВАНЕ НА КАНДИДАТ) ---
     st.markdown("---")
