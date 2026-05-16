@@ -4,7 +4,7 @@ from utils import supabase, check_permission
 from recruitment_modals import edit_position_modal, candidate_card_modal, create_position_modal
 # ИМПОРТ САМО НА СТАРИТЕ, РАБОТЕЩИ ПАРСЪРИ
 from parsers import parse_jobs_zip, parse_spreadsheet
-# НОВО: Импорт на модула за календара
+# Импорт на модула за календара
 from recruitment_calendar import render_interview_calendar
 
 # ДЕФИНИРАНЕ НА CSS ЗА КАНБАН ДЪСКАТА И БУТОНИТЕ
@@ -87,7 +87,7 @@ div[data-testid="stPills"] {
 def run_recruitment():
     st.markdown(KANBAN_CSS, unsafe_allow_html=True)
     
-    # ОБНОВЕНО: Заглавието и бутонът за Календара са разположени в две колони
+    # Заглавието и бутонът за Календара са разположени в две колони
     col_title, col_cal = st.columns([4, 1])
     with col_title:
         st.title("🎯 Подбор на персонал (Recruitment)")
@@ -103,6 +103,14 @@ def run_recruitment():
         st.session_state.active_campaign_id = None
     if "deep_link_triggered" not in st.session_state:
         st.session_state.deep_link_triggered = False
+    if "pending_candidate_card" not in st.session_state:
+        st.session_state.pending_candidate_card = None
+
+    # --- 0. ЩАФЕТА ОТ КАЛЕНДАРА (RELAY CATCHER) ---
+    if st.session_state.pending_candidate_card:
+        p_data = st.session_state.pending_candidate_card
+        st.session_state.pending_candidate_card = None  # Изчистваме веднага, за да не се зацикли
+        candidate_card_modal(p_data["candidate"], p_data["app_data"], p_data["pos_data"])
 
     # --- 1. DEEP LINK ---
     query_params = st.query_params
@@ -283,7 +291,10 @@ def run_recruitment():
                     manual_scores = app.get('manual_score') or {}
                     
                     is_reserve = int_details.get('reserve_checkbox', False)
-                    total_score = sum(manual_scores.values()) if manual_scores else 0
+                    
+                    # Изчисляване на обективната оценка за галерията
+                    categories = ["Търговска", "Сервизна", "Строителна/архитектурна", "Юридическа", "IT", "Складова", "Счетоводно-административна", "Управленска"]
+                    total_obj = sum(manual_scores.get(comp, 0) for comp in categories)
                     
                     with st.container(border=True):
                         card_col1, card_col2 = st.columns([1, 3])
@@ -295,7 +306,7 @@ def run_recruitment():
                         with card_col2:
                             reserve_icon = " <span style='color: #ffb400; font-weight: bold;'>❓</span>" if is_reserve else ""
                             st.markdown(f"**{full_name}**{reserve_icon}", unsafe_allow_html=True)
-                            st.caption(f"Оценка: {total_score}/48")
+                            st.caption(f"Обективна: {total_obj}/48")
                             if active_status_name == "Всички":
                                 st.caption(f"Статус: {app.get('status')}")
                             
