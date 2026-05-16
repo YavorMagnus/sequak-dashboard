@@ -162,10 +162,6 @@ def run_recruitment():
         st.info(f"Няма регистрирани обяви за тази фирма.")
         st.stop()
 
-    # =========================================================================
-    # РАЗДЕЛЯНЕ НА ИЗГЛЕДИТЕ: DASHBOARD (СПИСЪК) срещу ДЕТАЙЛИ (ГАЛЕРИЯ)
-    # =========================================================================
-
     if st.session_state.active_campaign_id is None:
         # ---------------------------------------------------------------------
         # РЕЖИМ А: DASHBOARD (СПИСЪК С ВСИЧКИ ОБЯВИ)
@@ -211,12 +207,10 @@ def run_recruitment():
         if sort_order == "По приоритет":
             filtered_positions.sort(key=lambda x: get_prio_weight(x.get('priority', 'Нормален')), reverse=True)
         else:
-            # Сортиране по ID в низходящ ред (като заместител на created_at за най-новите)
             filtered_positions.sort(key=lambda x: str(x.get('id', '')), reverse=True)
 
         st.markdown("### 📋 Списък с обяви")
         
-        # ВИЗУАЛИЗАЦИЯ НА КАРТИЧКИТЕ
         for pos in filtered_positions:
             with st.container(border=True):
                 c_info, c_btn = st.columns([4, 1], vertical_alignment="center")
@@ -237,19 +231,16 @@ def run_recruitment():
         # ---------------------------------------------------------------------
         selected_pos_data = next((p for p in all_positions if p['id'] == st.session_state.active_campaign_id), None)
         
-        # Защита, ако обявата е била изтрита междувременно
         if not selected_pos_data:
             st.session_state.active_campaign_id = None
             st.rerun()
 
-        # БУТОН ЗА ВРЪЩАНЕ НАЗАД КЪМ СПИСЪКА
         if st.button("⬅️ Назад към всички обяви", type="secondary"):
             st.session_state.active_campaign_id = None
             st.rerun()
             
         st.write("<br>", unsafe_allow_html=True)
 
-        # ПОКАЗВАНЕ НА ТЕКУЩАТА ОБЯВА В ХЕДЪРА
         p_icon = "🗑️" if selected_pos_data.get('is_deleted', False) else ("🔥" if selected_pos_data.get('priority') == "Спешен" else ("⚡" if selected_pos_data.get('priority') == "Висок" else "🟢"))
         st.info(f"**АКТИВНА ОБЯВА:** {p_icon} {selected_pos_data.get('title', 'Неизвестна')} | 📍 {selected_pos_data.get('city', 'София')} | {selected_pos_data.get('company_name', '')}")
 
@@ -313,11 +304,9 @@ def run_recruitment():
                 
             pill_options = [f"Всички ({status_counts['Всички']})"] + [f"{s} ({status_counts[s]})" for s in base_statuses]
             
-            # ЗАЩИТА СРЕЩУ СРИВ (Запомняме само базовата дума, без числата)
             if "gallery_base_status" not in st.session_state:
                 st.session_state.gallery_base_status = "Всички"
                 
-            # Намираме актуалното хапче, което започва с тази базова дума
             default_pill = next((p for p in pill_options if p.startswith(st.session_state.gallery_base_status + " (")), pill_options[0])
             
             selected_pill = st.pills("Филтър по статус:", pill_options, default=default_pill, selection_mode="single")
@@ -344,16 +333,18 @@ def run_recruitment():
                     with cols[i % 3]:
                         cand = app.get("hr_candidates", {})
                         full_name = cand.get('full_name', 'Неизвестен')
-                        int_details = app.get('interview_details') or {}
+                        
+                        # НОВАТА ЛОГИКА: Четем is_backup директно от app
+                        is_reserve = app.get('is_backup', False)
+                        
                         manual_scores = app.get('manual_score') or {}
-                        
-                        is_reserve = int_details.get('reserve_checkbox', False)
-                        
-                        # Изчисляване на обективната оценка за галерията
                         categories = ["Търговска", "Сервизна", "Строителна/архитектурна", "Юридическа", "IT", "Складова", "Счетоводно-административна", "Управленска"]
                         total_obj = sum(manual_scores.get(comp, 0) for comp in categories)
                         
-                        with st.container(border=True):
+                        # Слагаме златна рамка, ако е резерва
+                        container_attr = {"data-is-reserve": "true"} if is_reserve else {}
+                        
+                        with st.container(border=True, **container_attr):
                             card_col1, card_col2 = st.columns([1, 3])
                             with card_col1:
                                 if cand.get('photo_thumbnail'):
