@@ -2,7 +2,6 @@ import streamlit as st
 from datetime import datetime
 import pandas as pd
 from utils import supabase
-from recruitment_modals import candidate_card_modal
 
 # Речници за превод на дните и месеците на български
 BG_DAYS = {0: "Понеделник", 1: "Вторник", 2: "Сряда", 3: "Четвъртък", 4: "Петък", 5: "Събота", 6: "Неделя"}
@@ -27,13 +26,14 @@ def render_interview_calendar():
     
     for app in apps:
         int_details = app.get('interview_details') or {}
+        
+        # Проверяваме за официално интервю
         i_date = int_details.get('interview_date')
         i_time = int_details.get('interview_time')
         i_name = int_details.get('interviewer_name')
         
         if i_date:
             try:
-                # Превръщаме текста "YYYY-MM-DD" в истински Python Date обект
                 d_obj = datetime.strptime(i_date, "%Y-%m-%d").date()
                 if i_name: interviewers.add(i_name)
                 scheduled_apps.append({
@@ -41,9 +41,26 @@ def render_interview_calendar():
                     'date_obj': d_obj,
                     'time_str': i_time or "00:00",
                     'interviewer': i_name or "Непосочен",
+                    'type': "🏢 Официално"
                 })
             except:
-                pass # Игнорираме грешни формати на дати
+                pass
+
+        # Проверяваме и за телефонно интервю
+        ph_date = int_details.get('ph_date')
+        ph_time = int_details.get('ph_time')
+        if ph_date:
+            try:
+                d_obj_ph = datetime.strptime(ph_date, "%Y-%m-%d").date()
+                scheduled_apps.append({
+                    'app': app,
+                    'date_obj': d_obj_ph,
+                    'time_str': ph_time or "00:00",
+                    'interviewer': "HR Скрининг",
+                    'type': "📞 Телефонно"
+                })
+            except:
+                pass
 
     if not scheduled_apps:
         st.info("ℹ️ В момента няма насрочени интервюта в системата.")
@@ -53,8 +70,7 @@ def render_interview_calendar():
     col_f1, col_f2 = st.columns([2, 1])
     
     with col_f1:
-        all_interviewers = ["Всички"] + sorted(list(interviewers))
-        # Опитваме се да преселектираме автоматично текущия логнат потребител
+        all_interviewers = ["Всички", "HR Скрининг"] + sorted(list(interviewers))
         curr_user = st.session_state.get('username')
         def_idx = all_interviewers.index(curr_user) if curr_user in all_interviewers else 0
         sel_interviewer = st.pills("👤 Интервюиращ:", all_interviewers, default=all_interviewers[def_idx], selection_mode="single")
@@ -69,11 +85,9 @@ def render_interview_calendar():
     filtered_apps = []
     
     for item in scheduled_apps:
-        # Филтър по човек
         if sel_interviewer != "Всички" and item['interviewer'] != sel_interviewer:
             continue
         
-        # Филтър по период
         is_upcoming = item['date_obj'] >= today
         if sel_period == "Предстоящи" and not is_upcoming: continue
         if sel_period == "Минали" and is_upcoming: continue
@@ -82,17 +96,15 @@ def render_interview_calendar():
 
     # 5. СОРТИРАНЕ НА СПИСЪКА
     if sel_period == "Предстоящи":
-        # За предстоящи: от днес напред (възходящ ред)
         filtered_apps.sort(key=lambda x: (x['date_obj'], x['time_str']))
     else:
-        # За минали: от вчера назад (низходящ ред)
         filtered_apps.sort(key=lambda x: (x['date_obj'], x['time_str']), reverse=True)
 
     if not filtered_apps:
         st.info(f"Няма {sel_period.lower()} интервюта за този избор.")
         return
 
-    # 6. ГРУПИРАНЕ ПО ДНИ И ЧЕРТАЕНЕ НА ВРЕМЕВАТА ЛИНИЯ (Timeline)
+    # 6. ГРУПИРАНЕ ПО ДНИ И ЧЕРТАЕНЕ НА ВРЕМЕВАТА ЛИНИЯ
     st.divider()
     
     grouped_apps = {}
@@ -102,7 +114,6 @@ def render_interview_calendar():
             grouped_apps[d_str] = []
         grouped_apps[d_str].append(item)
 
-    # CSS за красива времева линия вътре в модала
     st.markdown("""
     <style>
     .timeline-date { color: #ffb400; font-size: 1.2rem; font-weight: bold; margin-top: 20px; margin-bottom: 10px; border-bottom: 2px solid #333; padding-bottom: 5px; }
@@ -121,14 +132,20 @@ def render_interview_calendar():
             p_title = pos.get('title', 'Неизвестна обява')
             p_comp = pos.get('company_name', '')
             time_str = item['time_str']
+            int_type = item['type']
             
-            # Използваме колони за всеки ред от графика
             with st.container(border=True):
                 r1, r2, r3 = st.columns([1, 4, 1], vertical_alignment="center")
                 with r1:
                     st.markdown(f"<span style='color: #00aaff; font-size: 1.3rem; font-weight: bold;'>{time_str}</span>", unsafe_allow_html=True)
                 with r2:
-                    st.markdown(f"**{c_name}**<br><span style='color: #aaaaaa; font-size: 0.9rem;'>{p_title} ({p_comp})</span>", unsafe_allow_html=True)
+                    st.markdown(f"**{c_name}** | {int_type}<br><span style='color: #aaaaaa; font-size: 0.9rem;'>{p_title} ({p_comp})</span>", unsafe_allow_html=True)
                 with r3:
-                    if st.button("📂 Отвори", key=f"cal_btn_{app['id']}", use_container_width=True):
-                        candidate_card_modal(cand, app, pos)
+                    # ЩАФЕТАТА: Записваме данните в паметта и рестартираме, за да затворим Календара
+                    if st.button("📂 Отвори", key=f"cal_btn_{app['id']}_{int_type}", use_container_width=True):
+                        st.session_state.pending_candidate_card = {
+                            "candidate": cand,
+                            "app_data": app,
+                            "pos_data": pos
+                        }
+                        st.rerun()
