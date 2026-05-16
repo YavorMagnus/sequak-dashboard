@@ -279,8 +279,25 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
     with tab_list[4]:
         time_slots = generate_time_options()
         
-        # 1. ТЕЛЕФОННО ИНТЕРВЮ
+        # Изтегляме списъка с потребители за всички акордеони
+        users_resp = supabase.table("users").select("username").execute()
+        user_list = [u['username'] for u in users_resp.data] if users_resp.data else []
+        
+        # 1. ТЕЛЕФОННО ИНТЕРВЮ (ОБНОВЕНО С ИНТЕРВЮИРАЩ)
         with st.expander("📞 1. Телефонно интервю (HR Скрининг)", expanded=False):
+            # Логика за HR по подразбиране
+            default_hr = "C.Foteva"
+            curr_ph_int = interview_info.get('ph_interviewer')
+            if not curr_ph_int:
+                if default_hr in user_list:
+                    curr_ph_int = default_hr
+                elif st.session_state.get('username') in user_list:
+                    curr_ph_int = st.session_state.username
+                else:
+                    curr_ph_int = user_list[0] if user_list else ""
+
+            sel_ph_int = st.selectbox("Провеждащ скрининга", user_list, index=user_list.index(curr_ph_int) if curr_ph_int in user_list else 0, key=f"ph_int_{app_data['id']}")
+
             col_date1, col_time1 = st.columns(2)
             with col_date1:
                 ph_d_val = datetime.strptime(interview_info['ph_date'], "%Y-%m-%d").date() if interview_info.get('ph_date') else datetime.now()
@@ -290,7 +307,11 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                 phone_time = st.selectbox("Час", time_slots, index=time_slots.index(ph_t_val) if ph_t_val in time_slots else 0, key=f"phone_time_{app_data['id']}")
             
             if st.button("📞 Запази график", type="primary", use_container_width=True):
-                interview_info.update({'ph_date': phone_date.strftime("%Y-%m-%d"), 'ph_time': phone_time})
+                interview_info.update({
+                    'ph_date': phone_date.strftime("%Y-%m-%d"), 
+                    'ph_time': phone_time,
+                    'ph_interviewer': sel_ph_int
+                })
                 supabase.table("hr_applications").update({"interview_details": interview_info}).eq("id", app_data['id']).execute()
                 st.toast("✅ Графикът за телефонно интервю е запазен!")
 
@@ -312,7 +333,6 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                     'mgr_date1': m_date1.strftime("%Y-%m-%d"), 'mgr_range1': m_range1,
                     'mgr_date2': m_date2.strftime("%Y-%m-%d"), 'mgr_range2': m_range2
                 })
-                # [HOOK-NOTIFICATION]: Избран за интервю
                 supabase.table("hr_applications").update({
                     "interview_details": interview_info, 
                     "status": "Избран за интервю"
@@ -321,8 +341,6 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
 
         # 3. НАСРОЧВАНЕ НА ОФИЦИАЛНО ИНТЕРВЮ
         with st.expander("🏢 3. Насрочване на интервю с мениджър", expanded=False):
-            users_resp = supabase.table("users").select("username").execute()
-            user_list = [u['username'] for u in users_resp.data] if users_resp.data else []
             curr_int = interview_info.get('interviewer_name', st.session_state.username)
             selected_interviewer = st.selectbox("Интервюиращ", user_list, index=user_list.index(curr_int) if curr_int in user_list else 0, key=f"sel_interv_{app_data['id']}")
             
@@ -340,7 +358,6 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
                     'interview_date': final_date.strftime("%Y-%m-%d"), 
                     'interview_time': final_time
                 })
-                # [HOOK-NOTIFICATION]: Потвърдено интервю
                 supabase.table("hr_applications").update({
                     "interview_details": interview_info, 
                     "status": "Потвърдено интервю"
