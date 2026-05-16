@@ -102,6 +102,9 @@ def run_recruitment():
         st.session_state.deep_link_triggered = False
     if "pending_candidate_card" not in st.session_state:
         st.session_state.pending_candidate_card = None
+    # НОВО: Инициализация на приемника от Action Center
+    if "target_gallery_status" not in st.session_state:
+        st.session_state.target_gallery_status = None
 
     # --- 0. ЩАФЕТА ОТ КАЛЕНДАРА (RELAY CATCHER) ---
     if st.session_state.pending_candidate_card:
@@ -301,6 +304,11 @@ def run_recruitment():
             
             if "gallery_base_status" not in st.session_state:
                 st.session_state.gallery_base_status = "Всички"
+                
+            # НОВО: Улавяне на кукичката от Action Center-а!
+            if st.session_state.get("target_gallery_status"):
+                st.session_state.gallery_base_status = st.session_state.target_gallery_status
+                st.session_state.target_gallery_status = None # Изчистваме веднага
                 
             default_pill = next((p for p in pill_options if p.startswith(st.session_state.gallery_base_status + " (")), pill_options[0])
             
