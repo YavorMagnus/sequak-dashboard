@@ -209,6 +209,11 @@ def run_recruitment():
                         if st.button("📂 Отвори", key=f"ds_btn_{fa['id']}", use_container_width=True):
                             st.session_state.active_campaign_id = pos['id']
                             st.session_state.active_company = pos.get('company_name')
+                            # FIX 1: Синхронизираме prev_company, за да не гърми филтърът
+                            st.session_state.prev_company = pos.get('company_name')
+                            # FIX 2: Изчистваме полето на търсачката
+                            st.session_state.ds_input = ""
+                            
                             st.session_state.pending_candidate_card = {
                                 "candidate": cand,
                                 "app_data": fa,
