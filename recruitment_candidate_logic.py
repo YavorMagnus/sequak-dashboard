@@ -106,29 +106,28 @@ def render_status_tab(candidate, app_data, pos_data, interview_info):
     current_status_name = app_data.get('status', 'Нов')
     new_status_selection = st.selectbox("Изберете нов статус", all_statuses, index=all_statuses.index(current_status_name) if current_status_name in all_statuses else 0)
     
-    # 1. Логика за "Отхвърлен" (Отхвърлен от нас)
+    # 1. Логика за "Отхвърлен"
     if new_status_selection == "Отхвърлен":
         reject_data = supabase.table("hr_settings").select("setting_value").eq("setting_key", "reject_reasons").execute()
         reject_reasons = reject_data.data[0].get("setting_value", ["Друго"]) if reject_data.data else ["Друго"]
-        
         curr_r = app_data.get('rejection_reason')
         is_res = app_data.get('is_backup', False)
-        
         st.selectbox("Причина за отхвърляне", reject_reasons, index=reject_reasons.index(curr_r) if curr_r in reject_reasons else 0, key=f"reject_reason_sel_{app_data['id']}")
         st.checkbox("Запази в резерва?", value=is_res, key=f"is_reserve_check_{app_data['id']}")
 
-    # 2. Логика за "Отказал" (Отказал се кандидат - НОВ ПАЧ 2)
+    # 2. Логика за "Отказал"
     if new_status_selection == "Отказал":
         decline_data = supabase.table("hr_settings").select("setting_value").eq("setting_key", "decline_reasons").execute()
         decline_reasons = decline_data.data[0].get("setting_value", ["Друго"]) if decline_data.data else ["Друго"]
-        
         curr_res = app_data.get('resolution_reason')
-        
         st.selectbox("Причина за отказ (от страна на кандидата)", decline_reasons, index=decline_reasons.index(curr_res) if curr_res in decline_reasons else 0, key=f"decline_reason_sel_{app_data['id']}")
 
     # 3. Логика за "Направено предложение"
     if new_status_selection == "Направено предложение":
+        curr_offer = interview_info.get('offer_value', '')
         is_offer_closed = interview_info.get('offer_closed', False)
+        # ДОРАБОТКА 2: Текстово поле за офертата
+        st.text_input("Параметри на предложението (Възнаграждение/Придобивки)", value=curr_offer, placeholder="напр. 1600 EUR нето + бонус", key=f"offer_val_{app_data['id']}")
         st.checkbox("Офертата е приета / Процесът е финализиран", value=is_offer_closed, key=f"offer_closed_{app_data['id']}")
 
     # 4. Логика за "Преместен / Копиран"
@@ -196,29 +195,53 @@ def render_status_tab(candidate, app_data, pos_data, interview_info):
                 "interview_details": interview_info
             }
             
+            status_changed = (new_status_selection != current_status_name)
+            system_note_text = None
+            
             # --- Управление на полетата за Отхвърлен ---
             if new_status_selection == "Отхвърлен":
                 if f"reject_reason_sel_{app_data['id']}" in st.session_state:
-                    update_payload['rejection_reason'] = st.session_state[f"reject_reason_sel_{app_data['id']}"]
+                    selected_reason = st.session_state[f"reject_reason_sel_{app_data['id']}"]
+                    update_payload['rejection_reason'] = selected_reason
+                    # ДОРАБОТКА 1: Подготовка на системна бележка
+                    if status_changed:
+                        system_note_text = f"Автоматично съобщение: Статусът е променен на 'Отхвърлен'. Причина: {selected_reason}"
+                        
                 if f"is_reserve_check_{app_data['id']}" in st.session_state:
                     update_payload['is_backup'] = st.session_state[f"is_reserve_check_{app_data['id']}"]
             else:
                 update_payload['rejection_reason'] = None
                 update_payload['is_backup'] = False
 
-            # --- Управление на полетата за Отказал (НОВ ПАЧ 2) ---
+            # --- Управление на полетата за Отказал ---
             if new_status_selection == "Отказал":
                 if f"decline_reason_sel_{app_data['id']}" in st.session_state:
-                    update_payload['resolution_reason'] = st.session_state[f"decline_reason_sel_{app_data['id']}"]
+                    selected_decline = st.session_state[f"decline_reason_sel_{app_data['id']}"]
+                    update_payload['resolution_reason'] = selected_decline
+                    # ДОРАБОТКА 1: Подготовка на системна бележка
+                    if status_changed:
+                        system_note_text = f"Автоматично съобщение: Статусът е променен на 'Отказал'. Причина: {selected_decline}"
             else:
                 update_payload['resolution_reason'] = None
 
             # --- Управление на полетата за Направено предложение ---
             if new_status_selection == "Направено предложение":
+                if f"offer_val_{app_data['id']}" in st.session_state:
+                    update_payload['interview_details']['offer_value'] = st.session_state[f"offer_val_{app_data['id']}"]
                 if f"offer_closed_{app_data['id']}" in st.session_state:
                     update_payload['interview_details']['offer_closed'] = st.session_state[f"offer_closed_{app_data['id']}"]
             else:
                 update_payload['interview_details']['offer_closed'] = False
             
+            # ДОРАБОТКА 1: Запис на системната бележка (ако има такава)
+            if system_note_text:
+                current_user = st.session_state.get('username', 'Система')
+                supabase.table("hr_comments").insert({
+                    "application_id": app_data['id'],
+                    "author_name": current_user,
+                    "comment_text": system_note_text,
+                    "comment_type": "Системна"
+                }).execute()
+
             supabase.table("hr_applications").update(update_payload).eq("id", app_data['id']).execute()
             st.rerun()
