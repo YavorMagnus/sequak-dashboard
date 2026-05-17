@@ -37,7 +37,7 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
         st.markdown("**📅 Предстоящи стъпки:**")
         ph_d = interview_info.get('ph_date')
         if ph_d:
-            st.markdown(f"📞 Telephoneно: **{ph_d}** в **{interview_info.get('ph_time', '')}**")
+            st.markdown(f"📞 Телефонно: **{ph_d}** в **{interview_info.get('ph_time', '')}**")
             
         mgr_d1 = interview_info.get('mgr_date1')
         if mgr_d1:
@@ -73,7 +73,15 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
         p_city = pos_data.get('city', 'Няма')
         s_min = pos_data.get('salary_min', '0')
         s_max = pos_data.get('salary_max', '0')
-        st.info(f"🎯 **Обява:** {p_title} ({p_city}) | **Възнаграждение:** EUR {s_min} - {s_max}")
+        
+        # ДОРАБОТКА 3: Показване на параметрите на офертата в синия банер
+        banner_text = f"🎯 **Обява:** {p_title} ({p_city}) | **Възнаграждение:** EUR {s_min} - {s_max}"
+        if app_data.get('status') == "Направено предложение":
+            offer_val = interview_info.get('offer_value', '')
+            if offer_val:
+                banner_text += f" | 💶 **Оферта:** {offer_val}"
+                
+        st.info(banner_text)
 
     if all_comments:
         latest_note = all_comments[0]
@@ -82,11 +90,24 @@ def candidate_card_modal(candidate, app_data, pos_data=None):
         display_text = full_text if len(full_text) <= 500 else full_text[:500] + "..."
         st.warning(f"💬 **Последна бележка ({latest_note.get('author_name', 'Система')} - {dt_str}):** {display_text}")
 
-    # ПАЧ 1: Бутон "Сподели кандидат" за генериране на Deep Link
+    # ПАЧ 1: Бутон "Сподели кандидат" с извличане на base_url от базата (БРОНИРАН ПРОТИВ КРАШОВЕ)
     col_share_empty, col_share_btn = st.columns([4, 1])
     with col_share_btn:
         if st.button("🔗 Сподели кандидат", use_container_width=True):
-            share_url = f"/?app_id={app_data['id']}"
+            base_url = ""
+            try:
+                url_res = supabase.table("hr_settings").select("setting_value").eq("setting_key", "base_url").execute()
+                if url_res.data:
+                    base_url = url_res.data[0].get("setting_value", "")
+            except Exception:
+                pass # Защита от червен екран - ако базата прекъсне, ще върне относителна навигация
+            
+            # Сглобяване на абсолютен линк
+            if base_url:
+                share_url = f"{base_url.strip('/')}/?app_id={app_data['id']}"
+            else:
+                share_url = f"/?app_id={app_data['id']}"
+                
             st.info(f"Линк (Ctrl+C): `{share_url}`")
 
     st.write("<br>", unsafe_allow_html=True)
