@@ -105,11 +105,10 @@ def run_recruitment():
         st.session_state.pending_candidate_card = None
     if "target_gallery_status" not in st.session_state:
         st.session_state.target_gallery_status = None
-    # НОВО: Ключ за uploader-а
     if "uploader_key" not in st.session_state:
         st.session_state.uploader_key = 1
 
-    # --- 0. ЩАФЕТА ОТ КАЛЕНДАРА (RELAY CATCHER) ---
+    # --- 0. ЩАФЕТА ОТ КАЛЕНДАРА И ТЪРСАЧКАТА (RELAY CATCHER) ---
     if st.session_state.pending_candidate_card:
         p_data = st.session_state.pending_candidate_card
         st.session_state.pending_candidate_card = None  # Изчистваме веднага
@@ -138,7 +137,6 @@ def run_recruitment():
         if not selected_company: 
             selected_company = "ВСИЧКИ"
             
-        # ЛОГИКА ЗА ИЗЧИСТВАНЕ ПРИ СМЯНА НА ФИРМАТА
         if selected_company != st.session_state.prev_company:
             st.session_state.active_company = selected_company
             st.session_state.prev_company = selected_company
@@ -150,7 +148,73 @@ def run_recruitment():
         if st.button("➕ Нова обява", type="secondary", use_container_width=True):
             create_position_modal(st.session_state.active_company if st.session_state.active_company != "ВСИЧКИ" else "REN")
 
+    # --- ДОРАБОТКА 6: ДЪЛБОКА ТЪРСАЧКА (DEEP SEARCH) ---
+    deep_search_term = st.text_input("🔍 Дълбоко търсене на кандидат (Име, Умения от CV, Бележки...)", placeholder="Въведете минимум 3 символа...", key="ds_input")
     st.divider()
+
+    if deep_search_term and len(deep_search_term.strip()) >= 3:
+        st.markdown(f"### 🔍 Резултати от дълбоко търсене за '{deep_search_term}'")
+        with st.spinner("Търсене из базата данни..."):
+            app_query = supabase.table("hr_applications").select("*, hr_candidates(*), hr_positions(*)").eq("is_deleted", False)
+            all_apps_res = app_query.execute()
+            all_apps = all_apps_res.data if all_apps_res.data else []
+            
+            comments_res = supabase.table("hr_comments").select("application_id, comment_text").execute()
+            comments_by_app = {}
+            if comments_res.data:
+                for c in comments_res.data:
+                    app_id = c.get("application_id")
+                    if app_id not in comments_by_app:
+                        comments_by_app[app_id] = []
+                    comments_by_app[app_id].append(str(c.get("comment_text", "")).lower())
+
+            search_lower = deep_search_term.lower()
+            found_apps = []
+            
+            for a in all_apps:
+                pos = a.get("hr_positions") or {}
+                if st.session_state.active_company != "ВСИЧКИ" and pos.get("company_name") != st.session_state.active_company:
+                    continue
+                if pos.get("is_deleted", False):
+                    continue
+                    
+                cand = a.get("hr_candidates") or {}
+                cand_name = cand.get("full_name", "").lower()
+                cv_data = cand.get("raw_cv_data") or {}
+                if not isinstance(cv_data, dict): cv_data = {}
+                
+                cv_text = str(cv_data.get("cv_text", "")).lower()
+                quest_text = str(cv_data.get("questionnaire", "")).lower()
+                
+                app_id = a.get("id")
+                comments_text = " ".join(comments_by_app.get(app_id, []))
+                
+                if search_lower in cand_name or search_lower in cv_text or search_lower in quest_text or search_lower in comments_text:
+                    found_apps.append(a)
+
+        if not found_apps:
+            st.warning("Няма намерени кандидати, отговарящи на търсенето.")
+        else:
+            for fa in found_apps:
+                cand = fa.get("hr_candidates", {})
+                pos = fa.get("hr_positions", {})
+                with st.container(border=True):
+                    col1, col2 = st.columns([4, 1], vertical_alignment="center")
+                    with col1:
+                        st.markdown(f"**👤 {cand.get('full_name', 'Неизвестен')}** | {fa.get('status', 'Нов')}")
+                        st.caption(f"🎯 {pos.get('title', '')} ({pos.get('company_name', '')})")
+                    with col2:
+                        if st.button("📂 Отвори", key=f"ds_btn_{fa['id']}", use_container_width=True):
+                            st.session_state.active_campaign_id = pos['id']
+                            st.session_state.active_company = pos.get('company_name')
+                            st.session_state.pending_candidate_card = {
+                                "candidate": cand,
+                                "app_data": fa,
+                                "pos_data": pos
+                            }
+                            st.rerun()
+                            
+        return # Прекратяваме чертаенето на останалата част от екрана, докато търсачката е активна
 
     # --- 3. ИЗВЛИЧАНЕ И ФИЛТРИРАНЕ НА БАЗАТА С ОБЯВИ ---
     query = supabase.table("hr_positions").select("*")
@@ -183,7 +247,6 @@ def run_recruitment():
             st.write("<br>", unsafe_allow_html=True)
             sort_order = st.radio("Подреждане:", ["Най-нови отгоре", "По приоритет"], horizontal=True, label_visibility="collapsed")
 
-        # Филтриране по статус и кошче
         if show_trash:
             filtered_positions = [p for p in all_positions if p.get('is_deleted', False)]
         else:
@@ -191,7 +254,6 @@ def run_recruitment():
             if not show_archived:
                 filtered_positions = [p for p in filtered_positions if p.get('status') == "Активна"]
 
-        # Търсене по текст
         if search_term:
             filtered_positions = [p for p in filtered_positions if search_term.lower() in p.get('title', '').lower() or search_term.lower() in p.get('city', '').lower()]
 
@@ -199,7 +261,6 @@ def run_recruitment():
             st.warning("Няма обяви, отговарящи на избраните филтри.")
             st.stop()
 
-        # ЛОГИКА ЗА СОРТИРАНЕ НА СПИСЪКА
         def get_prio_weight(prio_str):
             if prio_str == "Спешен": return 3
             if prio_str == "Висок": return 2
@@ -219,7 +280,14 @@ def run_recruitment():
                 with c_info:
                     p_icon = "🗑️" if pos.get('is_deleted', False) else ("🔥" if pos.get('priority') == "Спешен" else ("⚡" if pos.get('priority') == "Висок" else "🟢"))
                     st.markdown(f"**{p_icon} {pos.get('title', 'Неизвестна')}** | {pos.get('company_name', '')}")
-                    st.caption(f"📍 {pos.get('city', 'София')} | 💶 EUR {pos.get('salary_min', '0')} - {pos.get('salary_max', '0')} | Статус: {pos.get('status', 'Неизвестен')}")
+                    
+                    # ДОРАБОТКА 5: Поле "База" без празни скоби
+                    city_text = pos.get('city', 'София')
+                    base_loc = pos.get('base_location')
+                    if base_loc and str(base_loc).strip():
+                        city_text += f" ({str(base_loc).strip()})"
+                        
+                    st.caption(f"📍 {city_text} | 💶 EUR {pos.get('salary_min', '0')} - {pos.get('salary_max', '0')} | Статус: {pos.get('status', 'Неизвестен')}")
                     
                 with c_btn:
                     if st.button("📂 Влез в обявата", key=f"open_pos_{pos['id']}", use_container_width=True, type="primary"):
@@ -243,7 +311,14 @@ def run_recruitment():
         st.write("<br>", unsafe_allow_html=True)
 
         p_icon = "🗑️" if selected_pos_data.get('is_deleted', False) else ("🔥" if selected_pos_data.get('priority') == "Спешен" else ("⚡" if selected_pos_data.get('priority') == "Висок" else "🟢"))
-        st.info(f"**АКТИВНА ОБЯВА:** {p_icon} {selected_pos_data.get('title', 'Неизвестна')} | 📍 {selected_pos_data.get('city', 'София')} | {selected_pos_data.get('company_name', '')}")
+        
+        # ДОРАБОТКА 5: Поле "База" без празни скоби (и в детайлния изглед)
+        city_text_b = selected_pos_data.get('city', 'София')
+        base_loc_b = selected_pos_data.get('base_location')
+        if base_loc_b and str(base_loc_b).strip():
+            city_text_b += f" ({str(base_loc_b).strip()})"
+            
+        st.info(f"**АКТИВНА ОБЯВА:** {p_icon} {selected_pos_data.get('title', 'Неизвестна')} | 📍 {city_text_b} | {selected_pos_data.get('company_name', '')}")
 
         if st.button("⚙️ Редакция и Управление на обявата", use_container_width=True):
             edit_position_modal(selected_pos_data)
@@ -253,7 +328,6 @@ def run_recruitment():
         # --- 4. ЪПЛОУД НА КАНДИДАТИ ---
         if check_permission("recruitment", "upload_candidates") and not selected_pos_data.get('is_deleted', False):
             with st.expander("📥 Добави нови кандидати (Upload)", expanded=False):
-                # ПАЧ 4: Използване на динамичен ключ
                 uploaded_files = st.file_uploader("Качете ZIP (Jobs.bg), CSV или XLSX файлове", accept_multiple_files=True, type=['zip', 'csv', 'xlsx'], key=f"uploader_{st.session_state.uploader_key}")
                 
                 up_col1, up_col2 = st.columns([3, 1])
@@ -286,7 +360,6 @@ def run_recruitment():
                                         }).execute()
                                         success_count += 1
                                         
-                        # След успешен ъплоуд, автоматично нулираме ключа
                         st.session_state.uploader_key += 1
                         st.success(f"Успешно добавени {success_count} кандидати към обявата!")
                         st.rerun()
@@ -319,7 +392,7 @@ def run_recruitment():
                 
             if st.session_state.get("target_gallery_status"):
                 st.session_state.gallery_base_status = st.session_state.target_gallery_status
-                st.session_state.target_gallery_status = None # Изчистваме веднага
+                st.session_state.target_gallery_status = None 
                 
             default_pill = next((p for p in pill_options if p.startswith(st.session_state.gallery_base_status + " (")), pill_options[0])
             
@@ -348,14 +421,12 @@ def run_recruitment():
                         cand = app.get("hr_candidates", {})
                         full_name = cand.get('full_name', 'Неизвестен')
                         
-                        # Четем is_backup директно от колоната
                         is_reserve = app.get('is_backup', False)
                         
                         manual_scores = app.get('manual_score') or {}
                         categories = ["Търговска", "Сервизна", "Строителна/архитектурна", "Юридическа", "IT", "Складова", "Счетоводно-административна", "Управленска"]
                         total_obj = sum(manual_scores.get(comp, 0) for comp in categories)
                         
-                        # Премахнат непозволеният аргумент **container_attr
                         with st.container(border=True):
                             card_col1, card_col2 = st.columns([1, 3])
                             with card_col1:
