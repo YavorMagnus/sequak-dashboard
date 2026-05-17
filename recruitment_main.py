@@ -124,6 +124,8 @@ def run_recruitment():
             pos_data = app_data.get("hr_positions", {})
             if pos_data:
                 st.session_state.active_company = pos_data.get("company_name", "REN")
+                # FIX: Синхронизиране на предходната компания, за да не се затвори картонът
+                st.session_state.prev_company = st.session_state.active_company
                 st.session_state.active_campaign_id = pos_data.get("id")
             st.session_state.deep_link_triggered = True
             candidate_card_modal(app_data.get("hr_candidates", {}), app_data, pos_data)
