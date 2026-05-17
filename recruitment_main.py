@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 from utils import supabase, check_permission
-from recruitment_modals import edit_position_modal, candidate_card_modal, create_position_modal
+from recruitment_positions import edit_position_modal, create_position_modal
+from recruitment_candidate_ui import candidate_card_modal
 # ИМПОРТ САМО НА СТАРИТЕ, РАБОТЕЩИ ПАРСЪРИ
 from parsers import parse_jobs_zip, parse_spreadsheet
 # Импорт на модула за календара
@@ -102,9 +103,11 @@ def run_recruitment():
         st.session_state.deep_link_triggered = False
     if "pending_candidate_card" not in st.session_state:
         st.session_state.pending_candidate_card = None
-    # НОВО: Инициализация на приемника от Action Center
     if "target_gallery_status" not in st.session_state:
         st.session_state.target_gallery_status = None
+    # НОВО: Ключ за uploader-а
+    if "uploader_key" not in st.session_state:
+        st.session_state.uploader_key = 1
 
     # --- 0. ЩАФЕТА ОТ КАЛЕНДАРА (RELAY CATCHER) ---
     if st.session_state.pending_candidate_card:
@@ -250,38 +253,47 @@ def run_recruitment():
         # --- 4. ЪПЛОУД НА КАНДИДАТИ ---
         if check_permission("recruitment", "upload_candidates") and not selected_pos_data.get('is_deleted', False):
             with st.expander("📥 Добави нови кандидати (Upload)", expanded=False):
-                uploaded_files = st.file_uploader("Качете ZIP (Jobs.bg), CSV или XLSX файлове", accept_multiple_files=True, type=['zip', 'csv', 'xlsx'])
+                # ПАЧ 4: Използване на динамичен ключ
+                uploaded_files = st.file_uploader("Качете ZIP (Jobs.bg), CSV или XLSX файлове", accept_multiple_files=True, type=['zip', 'csv', 'xlsx'], key=f"uploader_{st.session_state.uploader_key}")
                 
-                if uploaded_files and st.button("🚀 Обработи и запиши", type="primary"):
-                    with st.spinner("Парсване и запис в базата..."):
-                        success_count = 0
-                        for file in uploaded_files:
-                            extracted_cands = []
-                            if file.name.lower().endswith('.zip'): extracted_cands = [parse_jobs_zip(file)]
-                            elif file.name.lower().endswith(('.csv', '.xlsx')): extracted_cands = parse_spreadsheet(file)
-                            
-                            for cand in extracted_cands:
-                                name, cv_data, photo = cand
-                                cand_insert = supabase.table("hr_candidates").insert({
-                                    "full_name": name,
-                                    "source": "Uploaded",
-                                    "raw_cv_data": cv_data,
-                                    "photo_thumbnail": photo
-                                }).execute()
+                up_col1, up_col2 = st.columns([3, 1])
+                with up_col1:
+                    if uploaded_files and st.button("🚀 Обработи и запиши", type="primary"):
+                        with st.spinner("Парсване и запис в базата..."):
+                            success_count = 0
+                            for file in uploaded_files:
+                                extracted_cands = []
+                                if file.name.lower().endswith('.zip'): extracted_cands = [parse_jobs_zip(file)]
+                                elif file.name.lower().endswith(('.csv', '.xlsx')): extracted_cands = parse_spreadsheet(file)
                                 
-                                if cand_insert.data:
-                                    cand_id = cand_insert.data[0]['id']
-                                    supabase.table("hr_applications").insert({
-                                        "candidate_id": cand_id,
-                                        "position_id": st.session_state.active_campaign_id,
-                                        "status": "Нов",
-                                        "is_deleted": False,
-                                        "interview_details": {}
+                                for cand in extracted_cands:
+                                    name, cv_data, photo = cand
+                                    cand_insert = supabase.table("hr_candidates").insert({
+                                        "full_name": name,
+                                        "source": "Uploaded",
+                                        "raw_cv_data": cv_data,
+                                        "photo_thumbnail": photo
                                     }).execute()
-                                    success_count += 1
                                     
-                    st.success(f"Успешно добавени {success_count} кандидати към обявата!")
-                    st.rerun()
+                                    if cand_insert.data:
+                                        cand_id = cand_insert.data[0]['id']
+                                        supabase.table("hr_applications").insert({
+                                            "candidate_id": cand_id,
+                                            "position_id": st.session_state.active_campaign_id,
+                                            "status": "Нов",
+                                            "is_deleted": False,
+                                            "interview_details": {}
+                                        }).execute()
+                                        success_count += 1
+                                        
+                        # След успешен ъплоуд, автоматично нулираме ключа
+                        st.session_state.uploader_key += 1
+                        st.success(f"Успешно добавени {success_count} кандидати към обявата!")
+                        st.rerun()
+                with up_col2:
+                    if uploaded_files and st.button("🧹 Изчисти", use_container_width=True):
+                        st.session_state.uploader_key += 1
+                        st.rerun()
                     
         st.divider()
 
@@ -305,7 +317,6 @@ def run_recruitment():
             if "gallery_base_status" not in st.session_state:
                 st.session_state.gallery_base_status = "Всички"
                 
-            # НОВО: Улавяне на кукичката от Action Center-а!
             if st.session_state.get("target_gallery_status"):
                 st.session_state.gallery_base_status = st.session_state.target_gallery_status
                 st.session_state.target_gallery_status = None # Изчистваме веднага
